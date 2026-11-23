@@ -1,0 +1,93 @@
+# deb, rpm and Arch packages; built by packaging/build-packages.sh
+name: drive-loader
+arch: all
+platform: linux
+version: ${VERSION}
+release: 1
+section: net
+priority: optional
+maintainer: Teiwazik <67657185+Teiwazik@users.noreply.github.com>
+description: |
+  GTK4 / libadwaita app for big Google Drive transfers, built on rclone.
+  Downloads and uploads run as systemd user units, keep going when the
+  window is closed and continue after a reboot.
+vendor: Teiwazik
+homepage: https://github.com/Teiwazik/drive-loader
+license: MIT
+
+contents:
+  - src: ${STAGE}/driveloader.py
+    dst: /usr/share/driveloader/driveloader.py
+    file_info: {mode: 0644}
+  - src: ${STAGE}/i18n/
+    dst: /usr/share/driveloader/i18n/
+    file_info: {mode: 0644}
+  - src: ${STAGE}/driveloader
+    dst: /usr/bin/driveloader
+    file_info: {mode: 0755}
+  - src: ${STAGE}/io.github.teiwazik.DriveLoader.desktop
+    dst: /usr/share/applications/io.github.teiwazik.DriveLoader.desktop
+    file_info: {mode: 0644}
+  - src: ${STAGE}/icons/
+    dst: /usr/share/icons/hicolor/scalable/apps/
+    file_info: {mode: 0644}
+  - src: ${STAGE}/LICENSE
+    dst: /usr/share/licenses/drive-loader/LICENSE
+    file_info: {mode: 0644}
+
+overrides:
+  deb:
+    depends:
+      - python3 (>= 3.10)
+      - python3-gi
+      - gir1.2-gtk-4.0
+      - gir1.2-adw-1 (>= 1.5)
+      - rclone
+      - systemd
+    recommends:
+      - gir1.2-poppler-0.18
+      - gir1.2-gst-plugins-bad-1.0
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-libav
+    suggests:
+      - gstreamer1.0-gtk4
+      - libreoffice-core
+  rpm:
+    depends:
+      - python3 >= 3.10
+      - python3-gobject
+      - gtk4
+      - libadwaita >= 1.5
+      - rclone
+      - systemd
+    recommends:
+      - poppler-glib
+      - gstreamer1-plugins-good
+      - gstreamer1-plugins-bad-free-libs
+    suggests:
+      - gstreamer1-plugin-gtk4
+      - libreoffice-core
+  archlinux:
+    depends:
+      - python
+      - python-gobject
+      - gtk4
+      - libadwaita
+      - rclone
+      - systemd
+    # pacman has optdepends only through .PKGINFO; listed in the PKGBUILD as well
+    suggests:
+      - poppler-glib
+      - gst-plugins-good
+      - gst-plugins-bad-libs
+      - gst-libav
+      - gst-plugin-gtk4
+
+rpm:
+  group: Applications/Internet
+  summary: GTK4 front-end for big Google Drive transfers with rclone
+deb:
+  fields:
+    Bugs: https://github.com/Teiwazik/drive-loader/issues
+archlinux:
+  packager: Teiwazik <67657185+Teiwazik@users.noreply.github.com>

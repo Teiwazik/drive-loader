@@ -95,13 +95,58 @@ Fedora: `python3-gobject gtk4 libadwaita rclone poppler-glib gstreamer1-plugins-
 
 ## Install
 
+Download a file for your system from the [latest release](https://github.com/Teiwazik/drive-loader/releases/latest).
+
+### AppImage (any distribution)
+
+One file with everything inside: Python, GTK 4, libadwaita, the preview plugins and rclone. It needs a system at least as new as Ubuntu 24.04, Debian 13 or Fedora 40 (glibc 2.39).
+
+```sh
+chmod +x DriveLoader-*-x86_64.AppImage
+./DriveLoader-*-x86_64.AppImage
+```
+
+- Transfer units, the login service and the tray autostart call the AppImage by its path. If you move or update the file, open it once from the new place, and the app rewrites those entries.
+- If the AppImage does not start, install FUSE (the `fuse3` package gives the `fusermount3` it needs), or run it with `--appimage-extract-and-run`.
+
+### Debian, Ubuntu
+
+```sh
+sudo apt install ./drive-loader_*_all.deb
+```
+
+Debian 13 or Ubuntu 24.04 and newer (libadwaita 1.5).
+
+### Fedora
+
+```sh
+sudo dnf install ./drive-loader-*.noarch.rpm
+```
+
+### Arch Linux
+
+```sh
+sudo pacman -U drive-loader-*-any.pkg.tar.zst
+```
+
+Or build it from the `PKGBUILD` attached to the release: `makepkg -si`.
+
+### From source, for the current user
+
 ```sh
 git clone https://github.com/Teiwazik/drive-loader.git
 cd drive-loader
 ./install.sh
 ```
 
-This puts the app into `~/.local` and needs no root. To remove it, run `./install.sh --uninstall`. Your jobs and settings in `~/.config/driveloader` are kept.
+This puts the app into `~/.local` and needs no root, but the dependencies from [Requirements](#requirements) must be installed. To remove it, run `./install.sh --uninstall`. Your jobs and settings in `~/.config/driveloader` are kept.
+
+### Building the packages
+
+The release workflow in `.github/workflows/packages.yml` builds them:
+
+- `packaging/appimage/build.sh` makes the AppImage, as root in an `ubuntu:24.04` container;
+- `packaging/build-packages.sh` makes the deb, rpm and Arch packages with [nFPM](https://nfpm.goreleaser.com/).
 
 ## Usage
 

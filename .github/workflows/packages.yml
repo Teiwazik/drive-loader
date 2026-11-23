@@ -1,0 +1,165 @@
+name: Packages
+
+# Builds the AppImage and the deb, rpm and Arch packages, tests them on several
+# distributions and, for a v* tag, publishes them as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+    paths: ['driveloader.py', 'i18n/**', 'data/**', 'packaging/**', '.github/workflows/packages.yml']
+  pull_request:
+    paths: ['driveloader.py', 'i18n/**', 'data/**', 'packaging/**', '.github/workflows/packages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: packaging/appimage/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: dist/*
+          if-no-files-found: error
+
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: packaging/build-packages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+          if-no-files-found: error
+
+  test:
+    needs: [appimage, packages]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            host: >-
+              apt-get update && apt-get install -y --no-install-recommends ca-certificates xvfb dbus
+              libgl1 libegl1 libgbm1 libfontconfig1 fonts-dejavu-core libharfbuzz0b libx11-6 libx11-xcb1
+              libwayland-client0 libfribidi0 libasound2t64
+            install: apt-get install -y ./dist/*.deb
+          - image: debian:trixie
+            host: >-
+              apt-get update && apt-get install -y --no-install-recommends ca-certificates xvfb dbus
+              libgl1 libegl1 libgbm1 libfontconfig1 fonts-dejavu-core libharfbuzz0b libx11-6 libx11-xcb1
+              libwayland-client0 libfribidi0 libasound2t64
+            install: apt-get install -y ./dist/*.deb
+          - image: fedora:latest
+            host: >-
+              dnf -y install xorg-x11-server-Xvfb dbus-daemon mesa-libGL mesa-libEGL mesa-libgbm
+              fontconfig dejavu-sans-fonts harfbuzz libX11 libX11-xcb libwayland-client fribidi alsa-lib
+            install: dnf -y install ./dist/*.rpm
+          - image: archlinux:latest
+            host: >-
+              pacman -Syu --noconfirm xorg-server-xvfb dbus mesa fontconfig ttf-dejavu harfbuzz
+              libx11 wayland fribidi alsa-lib
+            install: pacman -U --noconfirm dist/*.pkg.tar.zst
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Host libraries a desktop always has
+        run: ${{ matrix.host }}
+      - name: AppImage smoke test
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          chmod +x dist/*.AppImage
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 2
+          DISPLAY=:99 GSK_RENDERER=cairo dbus-run-session -- \
+            dist/*.AppImage --bundled-python packaging/appimage/smoke.py | tee smoke.log
+          grep -q "SMOKE OK" smoke.log
+      - name: AppImage runs the app
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: packaging/ci-run-app.sh dist/*.AppImage
+      - name: Install the package
+        run: ${{ matrix.install }}
+      - name: Installed package runs the app
+        run: |
+          test -x /usr/bin/driveloader
+          test -f /usr/share/applications/io.github.teiwazik.DriveLoader.desktop
+          packaging/ci-run-app.sh driveloader
+
+  pkgbuild:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fill in version and checksum
+        run: |
+          ver=${GITHUB_REF_NAME#v}
+          mkdir -p out
+          sed "s/^pkgver=.*/pkgver=$ver/" packaging/arch/PKGBUILD > out/PKGBUILD
+          curl -fsSL -o out/src.tar.gz "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
+          sum=$(sha256sum out/src.tar.gz | cut -d' ' -f1)
+          sed -i "s/^sha256sums=.*/sha256sums=('$sum')/" out/PKGBUILD
+          rm out/src.tar.gz
+          cat out/PKGBUILD
+      - name: makepkg
+        run: |
+          pacman -Syu --noconfirm base-devel
+          useradd -m builder
+          cp out/PKGBUILD /home/builder/
+          chown builder /home/builder/PKGBUILD
+          su builder -c 'cd ~ && makepkg --nodeps --noconfirm'
+          ls -l /home/builder/*.pkg.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkgbuild
+          path: out/PKGBUILD
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, pkgbuild]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check the tag matches VERSION
+        run: |
+          ver=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' driveloader.py)
+          test "v$ver" = "$GITHUB_REF_NAME"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=${GITHUB_REF_NAME#v}
+          cat > notes.md <<EOF
+          ## Install
+
+          | Distribution | File |
+          |---|---|
+          | Any (glibc 2.39+: Ubuntu 24.04, Debian 13, Fedora 40, Arch and newer) | \`DriveLoader-$ver-x86_64.AppImage\`, rclone included |
+          | Debian 13, Ubuntu 24.04 and newer | \`drive-loader_$ver-1_all.deb\` |
+          | Fedora 40 and newer | \`drive-loader-$ver-1.noarch.rpm\` |
+          | Arch Linux | \`drive-loader-$ver-1-any.pkg.tar.zst\` or \`PKGBUILD\` |
+
+          See the [README](https://github.com/$GITHUB_REPOSITORY#install) for the commands.
+          EOF
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Drive Loader $ver" \
+            --notes-file notes.md --generate-notes

@@ -1,0 +1,62 @@
+#!/bin/sh
+# Entry point of the Drive Loader AppImage.
+#   <AppImage>                 the app (all driveloader options work)
+#   <AppImage> --rclone ARGS   the bundled rclone (used by transfer units)
+HERE=$(dirname "$(readlink -f "$0")")
+
+if [ "$1" = "--rclone" ]; then
+    shift
+    exec "$HERE/usr/bin/rclone" "$@"
+fi
+
+# Every variable changed here is listed in DRIVELOADER_BUNDLE, and its old value
+# kept in DRIVELOADER_ORIG_<name>, so the app can start host programs with the
+# user's own environment.
+DRIVELOADER_BUNDLE=""
+bundle() {  # bundle NAME VALUE
+    DRIVELOADER_BUNDLE="$DRIVELOADER_BUNDLE $1"
+    if eval "[ -n \"\${$1+x}\" ]"; then
+        eval "export DRIVELOADER_ORIG_$1=\"\$$1\""
+    fi
+    eval "export $1=\"\$2\""
+}
+
+bundle LD_LIBRARY_PATH "$HERE/usr/lib"
+bundle GI_TYPELIB_PATH "$HERE/usr/lib/girepository-1.0"
+bundle GIO_MODULE_DIR "$HERE/usr/lib/gio/modules"
+bundle GSETTINGS_SCHEMA_DIR "$HERE/usr/share/glib-2.0/schemas"
+bundle XDG_DATA_DIRS "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:$HERE/usr/share"
+bundle GST_PLUGIN_SYSTEM_PATH_1_0 "$HERE/usr/lib/gstreamer-1.0"
+bundle GST_PLUGIN_PATH_1_0 ""
+bundle GST_PLUGIN_SCANNER_1_0 "$HERE/usr/lib/gstreamer-1.0/gst-plugin-scanner"
+bundle GST_REGISTRY_1_0 "${XDG_CACHE_HOME:-$HOME/.cache}/driveloader/gst-registry.bin"
+
+# The bundled OpenSSL looks for certificates in Ubuntu's place; use the host's.
+if [ -z "$SSL_CERT_FILE" ]; then
+    for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+             /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem /etc/pki/tls/cacert.pem; do
+        if [ -r "$f" ]; then bundle SSL_CERT_FILE "$f"; break; fi
+    done
+fi
+
+# gdk-pixbuf needs absolute loader paths, and the mount point differs every run.
+# Only the window needs pictures, not transfer units (--prep) or --resume.
+case "$1" in --prep|--resume) gui=no ;; *) gui=yes ;; esac
+cache_dir="${XDG_RUNTIME_DIR:-/tmp}"
+if [ "$gui" = yes ] && cache=$(mktemp "$cache_dir/driveloader-pixbuf.XXXXXX" 2>/dev/null); then
+    sed "s|@APPDIR@|$HERE|g" "$HERE/usr/lib/gdk-pixbuf-2.0/loaders.cache.in" > "$cache"
+    bundle GDK_PIXBUF_MODULE_FILE "$cache"
+    # removed once the app has exited; the subshell outlives the exec below
+    ( pid=$$; while kill -0 "$pid" 2>/dev/null; do sleep 30; done; rm -f "$cache" ) \
+        >/dev/null 2>&1 </dev/null &
+fi
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/driveloader" 2>/dev/null
+
+export DRIVELOADER_BUNDLE
+export DRIVELOADER_RCLONE="$HERE/usr/bin/rclone"
+
+if [ "$1" = "--bundled-python" ]; then  # for the CI smoke test
+    shift
+    exec "$HERE/usr/bin/python3" -s -E "$@"
+fi
+exec "$HERE/usr/bin/python3" -s -E "$HERE/usr/share/driveloader/driveloader.py" "$@"

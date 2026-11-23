@@ -31,7 +31,7 @@ from pathlib import Path
 
 APP_ID = "io.github.teiwazik.DriveLoader"
 APP_NAME = "Drive Loader"
-VERSION = "1.2"
+VERSION = "1.3"
 REMOTE = "gdrive"  # default / legacy remote name
 HOME = Path.home()
 CONF_DIR = HOME / ".config/driveloader"
@@ -42,9 +42,47 @@ SETTINGS_FILE = CONF_DIR / "settings.json"
 SERVICE_NAME = "driveloader-resume.service"
 SERVICE_FILE = HOME / ".config/systemd/user" / SERVICE_NAME
 AUTOSTART_FILE = HOME / ".config/autostart" / f"{APP_ID}.desktop"
-ICON_ROOT = HOME / ".local/share/icons"
 SCRIPT = Path(__file__).resolve()
-RCLONE = shutil.which("rclone") or "/usr/bin/rclone"
+# <prefix>/share/driveloader/driveloader.py -> <prefix>/share/icons (~/.local, /usr, AppImage)
+ICON_ROOT = next((d for d in (SCRIPT.parent.parent / "icons", HOME / ".local/share/icons")
+                  if (d / "hicolor/scalable/apps" / f"{APP_ID}.svg").exists()),
+                 HOME / ".local/share/icons")
+# Inside the AppImage the mount point goes away with the process, so systemd units
+# and autostart entries must call the .AppImage file itself.
+APPIMAGE = os.environ.get("APPIMAGE") if os.environ.get("DRIVELOADER_BUNDLE") else None
+SELF_CMD = [APPIMAGE] if APPIMAGE else [sys.executable, str(SCRIPT)]
+RCLONE = (APPIMAGE and os.environ.get("DRIVELOADER_RCLONE")) or shutil.which("rclone") or "/usr/bin/rclone"
+RCLONE_UNIT = [APPIMAGE, "--rclone"] if APPIMAGE else [RCLONE]
+
+if APPIMAGE:
+    # The AppImage sets library and plugin paths for its own Python. Host programs
+    # (xdg-open, systemctl, soffice, ...) get the user's original environment.
+    HOST_ENV = dict(os.environ)
+    for _n in HOST_ENV.pop("DRIVELOADER_BUNDLE").split():
+        _orig = HOST_ENV.pop("DRIVELOADER_ORIG_" + _n, None)
+        if _orig is None:
+            HOST_ENV.pop(_n, None)
+        else:
+            HOST_ENV[_n] = _orig
+    for _n in ("DRIVELOADER_RCLONE", "APPIMAGE", "APPDIR", "ARGV0", "OWD"):
+        HOST_ENV.pop(_n, None)
+    _popen_init = subprocess.Popen.__init__
+
+    def _host_popen(self, *args, **kw):
+        if kw.get("env") is None:
+            kw["env"] = HOST_ENV
+        _popen_init(self, *args, **kw)
+    subprocess.Popen.__init__ = _host_popen
+
+
+def exec_line(args):
+    """A command line for systemd ExecStart= and desktop-entry Exec=."""
+    out = []
+    for a in args:
+        a = a.replace("%", "%%")
+        out.append(a if re.fullmatch(r"[\w@%+=:,./-]+", a)
+                   else '"' + a.replace("\\", "\\\\").replace('"', '\\"') + '"')
+    return " ".join(out)
 ICON_DOWN = "folder-download-symbolic"
 ICON_UP = "document-send-symbolic"
 
@@ -317,7 +355,7 @@ def build_cmd(job, port):
     if job.get("bwlimit"):
         common += ["--bwlimit", job["bwlimit"]]
     if is_up(job):
-        cmd = [RCLONE, "copy", job["src"], f"{remote}:{job['dest'].strip('/')}",
+        cmd = RCLONE_UNIT + ["copy", job["src"], f"{remote}:{job['dest'].strip('/')}",
                "--check-first", "--drive-chunk-size", "32M"]
         if job.get("dest_id"):
             cmd += ["--drive-root-folder-id", job["dest_id"]]
@@ -328,9 +366,9 @@ def build_cmd(job, port):
     # file can then be continued from where it stopped (see prep_download)
     common += ["--multi-thread-streams", "0", "--local-no-preallocate"]
     if job["kind"] == "file":
-        return [RCLONE, "backend", "copyid", f"{remote}:", job["src"], job["dest"].rstrip("/") + "/"] + common
-    return [RCLONE, "copy", f"{remote}:", job["dest"], "--drive-root-folder-id", job["src"],
-            "--check-first", "--fast-list"] + common
+        return RCLONE_UNIT + ["backend", "copyid", f"{remote}:", job["src"], job["dest"].rstrip("/") + "/"] + common
+    return RCLONE_UNIT + ["copy", f"{remote}:", job["dest"], "--drive-root-folder-id", job["src"],
+                          "--check-first", "--fast-list"] + common
 
 
 def start_job(job):
@@ -366,8 +404,10 @@ def start_job(job):
         ] if is_up(job) else [
             "systemd-run", "--user", "--quiet", "--collect", f"--unit={unit_of(job)}",
             f"--description=Drive Loader {verb}: {job['name']}",
-            "/bin/bash", "-c", 'f="$1"; "$2" "$3" --prep "$4" "$5"; shift 5; "$@"; echo $? > "$f"',
-            "driveloader", str(exit_file_of(job)), sys.executable, str(SCRIPT), job["id"], str(port),
+            # $1 = exit file, then the prep command up to "--", then rclone
+            "/bin/bash", "-c", 'f="$1"; shift; p=(); while [ "$1" != -- ]; do p+=("$1"); shift; done; '
+            'shift; "${p[@]}"; "$@"; echo $? > "$f"',
+            "driveloader", str(exit_file_of(job)), *SELF_CMD, "--prep", job["id"], str(port), "--",
         ]
         wrapper += build_cmd(job, port)
         r = subprocess.run(wrapper, capture_output=True, text=True)
@@ -758,7 +798,7 @@ Description=Drive Loader: resume unfinished transfers
 [Service]
 Type=oneshot
 ExecStartPre=/bin/sh -c 'for i in $$(seq 1 90); do getent hosts www.googleapis.com >/dev/null 2>&1 && exit 0; sleep 2; done; exit 0'
-ExecStart={sys.executable} {SCRIPT} --resume
+ExecStart={exec_line(SELF_CMD + ["--resume"])}
 
 [Install]
 WantedBy=default.target
@@ -780,6 +820,23 @@ def set_autostart(on):
         subprocess.run(["systemctl", "--user", "disable", SERVICE_NAME], capture_output=True)
 
 
+TRAY_AUTOSTART_TEXT = (
+    "[Desktop Entry]\nType=Application\nName=Drive Loader (tray)\n"
+    f"Exec={exec_line(SELF_CMD + ['--hidden'])}\nIcon={APP_ID}\n"
+    "Terminal=false\nX-GNOME-Autostart-enabled=true\n")
+
+
+def refresh_autostart():
+    """Point the login entries at this copy of the app (e.g. a moved or updated AppImage)."""
+    try:
+        if SERVICE_FILE.exists() and SERVICE_FILE.read_text() != SERVICE_TEXT and autostart_enabled():
+            set_autostart(True)
+        if AUTOSTART_FILE.exists() and AUTOSTART_FILE.read_text() != TRAY_AUTOSTART_TEXT:
+            set_tray_autostart(True)
+    except OSError:
+        pass
+
+
 def tray_autostart_enabled():
     return AUTOSTART_FILE.exists()
 
@@ -788,9 +845,7 @@ def set_tray_autostart(on):
     if on:
         AUTOSTART_FILE.parent.mkdir(parents=True, exist_ok=True)
         AUTOSTART_FILE.write_text(
-            "[Desktop Entry]\nType=Application\nName=Drive Loader (tray)\n"
-            f"Exec={sys.executable} {SCRIPT} --hidden\nIcon={APP_ID}\n"
-            "Terminal=false\nX-GNOME-Autostart-enabled=true\n")
+            TRAY_AUTOSTART_TEXT)
     else:
         AUTOSTART_FILE.unlink(missing_ok=True)
 
@@ -4476,7 +4531,7 @@ def run_gui(start_hidden=False):
 
         def restart(self):
             """Start a fresh instance once this one has exited (jobs are systemd units)."""
-            subprocess.Popen(["sh", "-c", 'sleep 1; exec "$0" "$1"', sys.executable, str(SCRIPT)],
+            subprocess.Popen(["sh", "-c", 'sleep 1; exec "$@"', "sh", *SELF_CMD],
                              start_new_session=True)
             self.quit()
 
@@ -4491,6 +4546,7 @@ def main():
         names = resume_unfinished(Store())
         print("resumed:", ", ".join(names) if names else "nothing")
         return
+    refresh_autostart()
     run_gui(start_hidden="--hidden" in sys.argv)
 
 

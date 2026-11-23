@@ -1,0 +1,32 @@
+# Maintainer: Teiwazik <67657185+Teiwazik@users.noreply.github.com>
+# The release workflow fills in pkgver and sha256sums and attaches this file to the release.
+pkgname=drive-loader
+pkgver=1.3
+pkgrel=1
+pkgdesc="GTK4 / libadwaita app for big Google Drive transfers, built on rclone"
+arch=('any')
+url="https://github.com/Teiwazik/drive-loader"
+license=('MIT')
+depends=('python' 'python-gobject' 'gtk4' 'libadwaita' 'rclone' 'systemd')
+optdepends=('poppler-glib: PDF and Google Docs preview'
+            'gst-plugins-good: audio preview'
+            'gst-plugins-bad-libs: audio preview'
+            'gst-libav: audio preview of AAC and more formats'
+            'gst-plugin-gtk4: video preview'
+            'libreoffice-fresh: preview of Office files')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm644 driveloader.py "$pkgdir/usr/share/driveloader/driveloader.py"
+  install -Dm644 -t "$pkgdir/usr/share/driveloader/i18n" i18n/*.json
+  install -d "$pkgdir/usr/bin"
+  printf '#!/bin/sh\nexec python3 /usr/share/driveloader/driveloader.py "$@"\n' > "$pkgdir/usr/bin/driveloader"
+  chmod 755 "$pkgdir/usr/bin/driveloader"
+  install -d "$pkgdir/usr/share/applications"
+  sed "s|@BINDIR@|/usr/bin|" data/io.github.teiwazik.DriveLoader.desktop.in \
+    > "$pkgdir/usr/share/applications/io.github.teiwazik.DriveLoader.desktop"
+  install -Dm644 -t "$pkgdir/usr/share/icons/hicolor/scalable/apps" data/icons/*.svg
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
