@@ -31,7 +31,7 @@ from pathlib import Path
 
 APP_ID = "io.github.teiwazik.DriveLoader"
 APP_NAME = "Drive Loader"
-VERSION = "1.3"
+VERSION = "1.3.1"
 REMOTE = "gdrive"  # default / legacy remote name
 HOME = Path.home()
 CONF_DIR = HOME / ".config/driveloader"
@@ -2062,8 +2062,20 @@ def run_gui(start_hidden=False):
         return _gst["mods"]
 
     def can_play_video():
-        g = gst()
-        return bool(g and g[0].ElementFactory.find("gtk4paintablesink"))
+        if "video" not in _gst:
+            g = gst()
+            ok = bool(g and g[0].ElementFactory.find("gtk4paintablesink"))
+            if ok:
+                # the sink's GL context makes libepoxy load libGLESv2, and it
+                # abort()s the whole app when that library is missing
+                try:
+                    import ctypes
+                    ctypes.CDLL("libGLESv2.so.2")
+                except OSError:
+                    print("video preview off: no libGLESv2.so.2", file=sys.stderr)
+                    ok = False
+            _gst["video"] = ok
+        return _gst["video"]
 
     def poppler():
         if "pop" not in _gst:

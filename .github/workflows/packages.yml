@@ -57,18 +57,19 @@ jobs:
             host: >-
               apt-get update && apt-get install -y --no-install-recommends ca-certificates xvfb dbus
               libgl1 libegl1 libgbm1 libfontconfig1 fonts-dejavu-core libharfbuzz0b libx11-6 libx11-xcb1
-              libwayland-client0 libfribidi0 libasound2t64
+              libwayland-client0 libfribidi0 libasound2t64 libgles2
             install: apt-get install -y ./dist/*.deb
           - image: debian:trixie
             host: >-
               apt-get update && apt-get install -y --no-install-recommends ca-certificates xvfb dbus
               libgl1 libegl1 libgbm1 libfontconfig1 fonts-dejavu-core libharfbuzz0b libx11-6 libx11-xcb1
-              libwayland-client0 libfribidi0 libasound2t64
+              libwayland-client0 libfribidi0 libasound2t64 libgles2
             install: apt-get install -y ./dist/*.deb
           - image: fedora:latest
             host: >-
               dnf -y install xorg-x11-server-Xvfb dbus-daemon mesa-libGL mesa-libEGL mesa-libgbm
               fontconfig dejavu-sans-fonts harfbuzz libX11 libX11-xcb libwayland-client fribidi alsa-lib
+              libglvnd-gles
             install: dnf -y install ./dist/*.rpm
           - image: archlinux:latest
             host: >-
