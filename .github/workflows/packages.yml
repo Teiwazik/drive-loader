@@ -20,6 +20,13 @@ jobs:
     container: ubuntu:24.04
     steps:
       - uses: actions/checkout@v4
+      - id: sink
+        name: Cache key for the GTK 4 video sink build
+        run: echo "key=gtk4sink-$(grep -E '^(GTK4SINK|RUSTUP|RUST)_' packaging/appimage/build.sh | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: .cache
+          key: ${{ steps.sink.outputs.key }}
       - run: packaging/appimage/build.sh
       - uses: actions/upload-artifact@v4
         with:

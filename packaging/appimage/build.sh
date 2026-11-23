@@ -9,6 +9,14 @@ HERE=$ROOT/packaging/appimage
 VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' driveloader.py)
 RCLONE_VERSION=1.76.0
 RCLONE_SHA256=b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7
+# GTK 4 video sink for video preview; Ubuntu 24.04 does not package it, so build it
+GTK4SINK_VERSION=0.14.5
+GTK4SINK_SHA256=43374b56cbf41ca49730deb030f8d880bbf427226b53e14760f6b8bef03f4c0e
+GTK4SINK_FEATURES=gtk_v4_14,dmabuf,wayland,x11egl,x11glx
+RUSTUP_VERSION=1.29.3
+RUSTUP_SHA256=b1c8cb14e30889e7e2999e6b69e62d9e9b9ffc0f4df8180564d306d9680e6c55
+RUST_VERSION=1.100.0
+CACHE=${CACHE:-$ROOT/.cache}
 OUT=${OUT:-$ROOT/dist}
 WORK=$(mktemp -d)
 APPDIR=$WORK/AppDir
@@ -26,8 +34,6 @@ apt-get install -y -q --no-install-recommends \
     librsvg2-common libgdk-pixbuf2.0-bin libglib2.0-bin adwaita-icon-theme \
     dconf-gsettings-backend shared-mime-info \
     ca-certificates curl unzip file zsync desktop-file-utils
-# video preview needs the GTK 4 video sink, packaged only in some Ubuntu releases
-apt-get install -y -q --no-install-recommends gstreamer1.0-gtk4 || echo "no gstreamer1.0-gtk4: video preview off"
 
 mkdir -p "$APPDIR"/usr/{bin,lib,share}
 
@@ -56,7 +62,7 @@ for t in GLib GObject Gio GModule Gtk-4.0 Gdk-4.0 GdkWayland-4.0 GdkX11-4.0 Gsk-
 done
 ls "$APPDIR/usr/lib/girepository-1.0"
 
-# ---- GStreamer plugins (audio preview; video only with the GTK 4 sink)
+# ---- GStreamer plugins (audio and video preview)
 mkdir -p "$APPDIR/usr/lib/gstreamer-1.0"
 cp "$SYS"/gstreamer-1.0/*.so "$APPDIR/usr/lib/gstreamer-1.0/"
 cp "$SYS"/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner "$APPDIR/usr/lib/gstreamer-1.0/"
@@ -65,6 +71,29 @@ cp "$SYS"/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner "$APPDIR/usr/lib/gstream
   rm -f libgstvideo4linux2.so libgstdv.so libgst1394.so libgstcacasink.so libgstaasink.so \
         libgstshout2.so libgstjack.so libgstossaudio.so libgstoss4.so libgstximagesrc.so \
         libgstpulseaudio-device.so libgstdtsdec.so )
+
+# ---- gtk4paintablesink (gst-plugins-rs) for video preview; CI caches the result
+sink_so=$CACHE/libgstgtk4-$GTK4SINK_VERSION-$(echo "$GTK4SINK_FEATURES" | tr , -).so
+if [ ! -s "$sink_so" ]; then
+    apt-get install -y -q --no-install-recommends build-essential pkg-config \
+        libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+    curl -fsSL -o "$WORK/rustup-init" \
+        "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init"
+    echo "$RUSTUP_SHA256  $WORK/rustup-init" | sha256sum -c -
+    chmod +x "$WORK/rustup-init"
+    export RUSTUP_HOME=$WORK/rustup CARGO_HOME=$WORK/cargo
+    "$WORK/rustup-init" -y -q --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
+    curl -fsSL -o "$WORK/gtk4sink.crate" \
+        "https://static.crates.io/crates/gst-plugin-gtk4/gst-plugin-gtk4-$GTK4SINK_VERSION.crate"
+    echo "$GTK4SINK_SHA256  $WORK/gtk4sink.crate" | sha256sum -c -
+    tar -xzf "$WORK/gtk4sink.crate" -C "$WORK"
+    ( cd "$WORK/gst-plugin-gtk4-$GTK4SINK_VERSION"
+      "$CARGO_HOME/bin/cargo" build --release --locked --no-default-features \
+          --features "$GTK4SINK_FEATURES" )
+    mkdir -p "$CACHE"
+    cp "$WORK/gst-plugin-gtk4-$GTK4SINK_VERSION/target/release/libgstgtk4.so" "$sink_so"
+fi
+install -m644 "$sink_so" "$APPDIR/usr/lib/gstreamer-1.0/libgstgtk4.so"
 
 # ---- gdk-pixbuf loaders (SVG for the tray icon, etc.); the cache gets real paths at run time
 mkdir -p "$APPDIR/usr/lib/gdk-pixbuf-2.0/loaders"

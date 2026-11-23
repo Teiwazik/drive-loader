@@ -51,7 +51,7 @@ Drive Loader adds a native Linux front‑end:
 - **Images** at full resolution.
 - **Text and code** files.
 - **Audio** with cover art and tags. Audio streams through a local proxy, so seeking works without downloading the whole file.
-- **Video** (with `gst-plugin-gtk4`).
+- **Video** (with `gst-plugin-gtk4`; the AppImage has it built in).
 - **PDF**, **Google Docs, Sheets and Slides** (exported to PDF), and **Office files** (with LibreOffice), shown page by page.
 
 ### Accounts and desktop
@@ -99,7 +99,7 @@ Download a file for your system from the [latest release](https://github.com/Tei
 
 ### AppImage (any distribution)
 
-One file with everything inside: Python, GTK 4, libadwaita, the preview plugins and rclone. It needs a system at least as new as Ubuntu 24.04, Debian 13 or Fedora 40 (glibc 2.39).
+One file with everything inside: Python, GTK 4, libadwaita, the preview plugins (video included) and rclone. It needs a system at least as new as Ubuntu 24.04, Debian 13 or Fedora 40 (glibc 2.39).
 
 ```sh
 chmod +x DriveLoader-*-x86_64.AppImage
@@ -107,7 +107,6 @@ chmod +x DriveLoader-*-x86_64.AppImage
 ```
 
 - Transfer units, the login service and the tray autostart call the AppImage by its path. If you move or update the file, open it once from the new place, and the app rewrites those entries.
-- Video preview is not available in the AppImage: Ubuntu 24.04, which it is built on, has no GTK 4 video sink. Audio, images, PDF and documents work. For video, use a distribution package together with the GTK 4 video sink (`gstreamer1.0-gtk4`, `gstreamer1-plugin-gtk4` or `gst-plugin-gtk4`).
 - If the AppImage does not start, install FUSE (the `fuse3` package gives the `fusermount3` it needs), or run it with `--appimage-extract-and-run`.
 
 ### Debian, Ubuntu

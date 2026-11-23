@@ -26,7 +26,6 @@ for name in ["playbin3", "souphttpsrc", "pulsesink", "autoaudiosink", "decodebin
     print("gst", name, "ok" if ok else "MISSING")
     if not ok:
         failed.append(name)
-print("gst gtk4paintablesink", Gst.ElementFactory.find("gtk4paintablesink") is not None)
 
 icon = os.path.join(os.environ["APPDIR"], "io.github.teiwazik.DriveLoader.svg")
 pb = GdkPixbuf.Pixbuf.new_from_file_at_size(icon, 32, 32)
@@ -42,7 +41,41 @@ def activate(app):
     win = Adw.ApplicationWindow(application=app, title="smoke")
     win.set_content(Adw.StatusPage(icon_name="folder-download-symbolic", title="ok"))
     win.present()
-    GLib.timeout_add(1500, app.quit)
+    # video preview: play a few test frames into the GTK 4 sink shown in the window
+    sink = Gst.ElementFactory.make("gtk4paintablesink", None)
+    if sink is None:
+        print("gst gtk4paintablesink MISSING")
+        failed.append("gtk4paintablesink")
+        GLib.timeout_add(1500, app.quit)
+        return
+    win.set_content(Gtk.Picture(paintable=sink.get_property("paintable")))
+    pipe = Gst.parse_launch("videotestsrc num-buffers=30 ! videoconvert name=c")
+    pipe.add(sink)
+    pipe.get_by_name("c").link(sink)
+    bus = pipe.get_bus()
+
+    def poll():
+        msg = bus.pop_filtered(Gst.MessageType.EOS | Gst.MessageType.ERROR)
+        if msg is None:
+            return True
+        if msg.type == Gst.MessageType.ERROR:
+            print("video", msg.parse_error()[0].message)
+            failed.append("video playback")
+        else:
+            print("video frames ok")
+        pipe.set_state(Gst.State.NULL)
+        app.quit()
+        return False
+
+    pipe.set_state(Gst.State.PLAYING)
+    GLib.timeout_add(100, poll)
+
+    def timeout():
+        failed.append("video timeout")
+        app.quit()
+        return False
+
+    GLib.timeout_add_seconds(20, timeout)
 
 
 app = Adw.Application(application_id="io.github.teiwazik.DriveLoader.Smoke")
