@@ -167,7 +167,7 @@ libharfbuzz.so.0
 # libcom_err.so.2  (bundled by Drive Loader: Debian 13 base systems lack it)
 libexpat.so.1
 libgcc_s.so.1
-libgpg-error.so.0
+# libgpg-error.so.0  (bundled by Drive Loader with the matching libgcrypt.so.20; Debian 13 base systems lack it)
 # libgssapi_krb5.so.2 # Disputed, seemingly needed by Arch Linux since Kerberos is named differently there
 # libgssapi.so.3 # Seemingly needed when running Ubuntu 14.04 binaries on Fedora 23
 # libhcrypto.so.4 # Missing on openSUSE LEAP 42.0
@@ -196,7 +196,7 @@ libz.so.1
 # relocation error: /lib/x86_64-linux-gnu/libgcrypt.so.20:
 # symbol gpgrt_lock_lock, version GPG_ERROR_1.0 not defined
 # in file libgpg-error.so.0 with link time reference
-libgpg-error.so.0
+# libgpg-error.so.0  (bundled by Drive Loader with the matching libgcrypt.so.20; Debian 13 base systems lack it)
 
 libjack.so.0
 # it must match the ABI of the JACK server which is installed in the base system

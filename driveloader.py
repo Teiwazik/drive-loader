@@ -967,6 +967,20 @@ def run_gui(start_hidden=False):
     gi.require_version("Adw", "1")
     from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
+    # libadwaita 1.5 (Ubuntu 24.04, the AppImage base) has no Adw.Spinner
+    if hasattr(Adw, "Spinner"):
+        Spinner = Adw.Spinner
+    else:
+        def Spinner(**kw):
+            return Gtk.Spinner(spinning=True, **kw)
+
+    def accent_rgba(sm):
+        if hasattr(sm, "get_accent_color_rgba"):  # libadwaita 1.6+
+            return sm.get_accent_color_rgba()
+        c = Gdk.RGBA()
+        c.parse("#78aeed" if sm.get_dark() else "#3584e4")
+        return c
+
     CSS = """
     .job-card { padding: 18px 20px; }
     .job-icon { background: alpha(@accent_bg_color, 0.16); color: @accent_color;
@@ -1343,7 +1357,7 @@ def run_gui(start_hidden=False):
                 return
             peak = max(max(data), 1)
             sm = Adw.StyleManager.get_default()
-            c = sm.get_accent_color_rgba()
+            c = accent_rgba(sm)
             if self.up:
                 c = Gdk.RGBA()
                 c.parse("#26a269" if not sm.get_dark() else "#8ff0a4")
@@ -1587,7 +1601,7 @@ def run_gui(start_hidden=False):
             hb.set_title_widget(self.wt)
             tv.add_top_bar(hb)
             self.stack = Gtk.Stack()
-            self.stack.add_named(Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
+            self.stack.add_named(Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
                                              width_request=32, height_request=32), "load")
             sc = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
             self.lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, margin_top=12,
@@ -2160,7 +2174,7 @@ def run_gui(start_hidden=False):
             self.insert_action_group("pv", ag)
 
             self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vexpand=True)
-            self.stack.add_named(Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
+            self.stack.add_named(Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
                                              width_request=32, height_request=32), "load")
             self.pic = Gtk.Picture(content_fit=Gtk.ContentFit.CONTAIN, can_shrink=True)
             self.pic.add_css_class("preview-pic")
@@ -2623,7 +2637,7 @@ def run_gui(start_hidden=False):
             self.crumb_sc = Gtk.ScrolledWindow(hexpand=True, vscrollbar_policy=Gtk.PolicyType.NEVER,
                                                hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
                                                child=self.crumbs)
-            self.spinner = Adw.Spinner(visible=False, width_request=16, height_request=16)
+            self.spinner = Spinner(visible=False, width_request=16, height_request=16)
             self.search_btn = Gtk.ToggleButton(icon_name="system-search-symbolic",
                                                tooltip_text=_("Поиск в папке (Ctrl+F)"))
             self.search_btn.add_css_class("flat")
@@ -2662,7 +2676,7 @@ def run_gui(start_hidden=False):
             self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, vexpand=True)
             lbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
                            halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
-            lbox.append(Adw.Spinner(halign=Gtk.Align.CENTER, width_request=32, height_request=32))
+            lbox.append(Spinner(halign=Gtk.Align.CENTER, width_request=32, height_request=32))
             self.load_hint = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, visible=False)
             hint = self.hint_lbl = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, max_width_chars=48)
             hint.add_css_class("dim-label")
@@ -3873,7 +3887,7 @@ def run_gui(start_hidden=False):
 
             key = Adw.PreferencesGroup(title=_("Ключ"))
             self.key_row = Adw.ActionRow()
-            self.key_spin = Adw.Spinner(valign=Gtk.Align.CENTER)
+            self.key_spin = Spinner(valign=Gtk.Align.CENTER)
             self.key_icon = Gtk.Image(icon_name="emblem-ok-symbolic", valign=Gtk.Align.CENTER)
             self.key_icon.add_css_class("success")
             self.key_row.add_prefix(self.key_spin)
