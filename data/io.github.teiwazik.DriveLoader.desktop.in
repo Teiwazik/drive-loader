@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Drive Loader
+Name[ru]=Загрузчик Google Drive
+GenericName=Google Drive Transfers
+Comment=Download and upload Google Drive files with rclone, resumable after reboot
+Comment[ru]=Скачивание и выгрузка Google Drive через rclone с продолжением после перезагрузки
+Exec=@BINDIR@/driveloader
+Icon=io.github.teiwazik.DriveLoader
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=google;drive;rclone;download;upload;gdrive;
+StartupNotify=true
+StartupWMClass=io.github.teiwazik.DriveLoader
