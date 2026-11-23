@@ -37,6 +37,8 @@ python3 -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("Adw
 [ -n "$missing" ] && echo "Warning: missing dependencies:$missing (see README)" >&2
 
 install -Dm644 driveloader.py "$APPDIR/driveloader.py"
+install -d "$APPDIR/i18n"
+install -m644 i18n/*.json "$APPDIR/i18n/"
 install -d "$BINDIR" "$ICONDIR" "$(dirname "$DESKTOP")"
 printf '#!/bin/sh\nexec python3 "%s/driveloader.py" "$@"\n' "$APPDIR" > "$BINDIR/driveloader"
 chmod 755 "$BINDIR/driveloader"

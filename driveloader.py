@@ -31,7 +31,7 @@ from pathlib import Path
 
 APP_ID = "io.github.teiwazik.DriveLoader"
 APP_NAME = "Drive Loader"
-VERSION = "1.1"
+VERSION = "1.2"
 REMOTE = "gdrive"  # default / legacy remote name
 HOME = Path.home()
 CONF_DIR = HOME / ".config/driveloader"
@@ -48,19 +48,73 @@ RCLONE = shutil.which("rclone") or "/usr/bin/rclone"
 ICON_DOWN = "folder-download-symbolic"
 ICON_UP = "document-send-symbolic"
 
+# ---------------------------------------------------------------- i18n
+# The Russian UI strings are the message ids. i18n/<code>.json next to the
+# script maps them to another language; "_language" is its native name.
+I18N_DIR = SCRIPT.parent / "i18n"
+
+
+def system_lang():
+    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        for v in os.environ.get(var, "").split(":"):
+            code = re.split(r"[_.@]", v)[0].lower()
+            if code in ("c", "posix"):
+                return "en"
+            if code:
+                return code
+    return "en"
+
+
+def available_langs():
+    """{code: native name}; Russian is built in."""
+    langs = {"ru": "Русский"}
+    for f in sorted(I18N_DIR.glob("*.json")):
+        try:
+            langs[f.stem] = json.loads(f.read_text(encoding="utf-8")).get("_language", f.stem)
+        except Exception:
+            pass
+    return langs
+
+
+def pick_lang(choice):
+    langs = available_langs()
+    if choice in langs:
+        return choice
+    code = system_lang()
+    return code if code in langs else "en" if "en" in langs else "ru"
+
+
+try:
+    LANG_CHOICE = json.loads(SETTINGS_FILE.read_text()).get("lang", "system")
+except Exception:
+    LANG_CHOICE = "system"
+LANG = pick_lang(LANG_CHOICE)
+try:
+    _TR = {} if LANG == "ru" else json.loads((I18N_DIR / f"{LANG}.json").read_text(encoding="utf-8"))
+except Exception:
+    LANG, _TR = "ru", {}
+if LANG != system_lang():
+    os.environ["LANGUAGE"] = LANG  # GTK's own strings follow the chosen language
+DECIMAL = _TR.get("_decimal", ",")
+
+
+def _(msg):
+    return _TR.get(msg, msg)
+
+
 EXIT_CODES = {
-    1: "ошибка синтаксиса или настроек",
-    2: "неизвестная ошибка",
-    3: "папка не найдена (нет доступа по ссылке?)",
-    4: "файл не найден",
-    5: "временная ошибка — попробуйте продолжить позже",
-    6: "часть файлов не передалась",
-    7: "критическая ошибка (квота или лимит Google?)",
-    8: "превышен лимит передачи",
+    1: _("ошибка синтаксиса или настроек"),
+    2: _("неизвестная ошибка"),
+    3: _("папка не найдена (нет доступа по ссылке?)"),
+    4: _("файл не найден"),
+    5: _("временная ошибка — попробуйте продолжить позже"),
+    6: _("часть файлов не передалась"),
+    7: _("критическая ошибка (квота или лимит Google?)"),
+    8: _("превышен лимит передачи"),
 }
 
-BW_OPTIONS = [("Без ограничений", ""), ("1 МБ/с", "1M"), ("5 МБ/с", "5M"),
-              ("10 МБ/с", "10M"), ("25 МБ/с", "25M"), ("50 МБ/с", "50M")]
+BW_OPTIONS = [(_("Без ограничений"), ""), (_("1 МБ/с"), "1M"), (_("5 МБ/с"), "5M"),
+              (_("10 МБ/с"), "10M"), (_("25 МБ/с"), "25M"), (_("50 МБ/с"), "50M")]
 
 # ---------------------------------------------------------------- storage
 
@@ -292,7 +346,7 @@ def start_job(job):
         if is_up(job):
             if not Path(job["src"]).exists():
                 job["status"] = "error"
-                job["error"] = f"Не найдено: {job['src']}"
+                job["error"] = _("Не найдено: {0}").format(job['src'])
                 return False
             if job.get("files"):
                 state_file(job, "files").write_text("\n".join(job["files"]) + "\n")
@@ -322,7 +376,7 @@ def start_job(job):
                 job.update(status="running", port=read_port(job))
                 return True
             job["status"] = "error"
-            job["error"] = r.stderr.strip() or "не удалось запустить rclone"
+            job["error"] = r.stderr.strip() or _("не удалось запустить rclone")
             return False
         state_file(job, "port").write_text(str(port))
         job.update(status="running", port=port, started=time.time())
@@ -356,10 +410,10 @@ def finish_job(job, code):
         job["finished"] = time.time()
         return True
     job["status"] = "error"
-    msg = EXIT_CODES.get(code, f"rclone завершился с кодом {code}")
+    msg = EXIT_CODES.get(code, _("rclone завершился с кодом {0}").format(code))
     tail = last_errors(job)
     if is_up(job) and "insufficient" in tail.lower() and "scope" in tail.lower():
-        msg = "у аккаунта нет права записи — войдите заново без режима «только чтение»"
+        msg = _("у аккаунта нет права записи — войдите заново без режима «только чтение»")
     if auth_expired(tail):
         msg = AUTH_EXPIRED
     job["error"] = msg + (f"\n{tail}" if tail else "")
@@ -598,7 +652,7 @@ def resume_partial(job, api, stats, part, final):
     size = part.stat().st_size
     meta = remote_meta(job, api, final)
     if not meta:
-        plog(job, "NOTICE", f"{final.name}: файл на Диске не найден — частичная копия удалена")
+        plog(job, "NOTICE", _("{0}: файл на Диске не найден — частичная копия удалена").format(final.name))
         part.unlink(missing_ok=True)
         return
     fid, total, md5, mtime = meta
@@ -612,14 +666,14 @@ def resume_partial(job, api, stats, part, final):
     with open(part, "r+b") as f:
         offs = [keep * k // 5 for k in range(1, 5)] + [keep - 65536]
         if not same_bytes(api, fid, f, offs):
-            plog(job, "NOTICE", f"{final.name}: частичная копия не совпала с Диском — качаем заново")
+            plog(job, "NOTICE", _("{0}: частичная копия не совпала с Диском — качаем заново").format(final.name))
             f.close()
             part.unlink(missing_ok=True)
             return
         f.truncate(keep)
-        plog(job, "INFO", f"{final.name}: докачка с {human(keep)} из {human(total)}")
+        plog(job, "INFO", _("{0}: докачка с {1} из {2}").format(final.name, human(keep), human(total)))
         h = hashlib.md5()
-        stats.begin(f"{final.name} — проверка начала", keep, download=False)
+        stats.begin(_("{0} — проверка начала").format(final.name), keep, download=False)
         f.seek(0)
         while chunk := f.read(8 * MiB):
             h.update(chunk)
@@ -630,7 +684,7 @@ def resume_partial(job, api, stats, part, final):
             try:
                 with api.open(api.media(fid), {"Range": f"bytes={pos}-"}, timeout=60) as r:
                     if r.status != 206:
-                        raise RuntimeError(f"сервер не поддержал докачку (HTTP {r.status})")
+                        raise RuntimeError(_("сервер не поддержал докачку (HTTP {0})").format(r.status))
                     while chunk := r.read(MiB):
                         f.write(chunk)
                         h.update(chunk)
@@ -646,19 +700,19 @@ def resume_partial(job, api, stats, part, final):
                         fails = 0
             except Exception as e:
                 fails += 1
-                plog(job, "NOTICE", f"{final.name}: обрыв на {human(pos)} ({e}), повтор {fails}")
+                plog(job, "NOTICE", _("{0}: обрыв на {1} ({2}), повтор {3}").format(final.name, human(pos), e, fails))
                 if fails > 20:
                     return
                 time.sleep(min(5 * fails, 60))
         f.flush()
     if pos != total or h.hexdigest() != md5:
-        plog(job, "NOTICE", f"{final.name}: MD5 не совпал — файл будет скачан заново")
+        plog(job, "NOTICE", _("{0}: MD5 не совпал — файл будет скачан заново").format(final.name))
         part.unlink(missing_ok=True)
         return
     os.replace(part, final)
     if mtime:
         os.utime(final, ns=(mtime, mtime))   # so rclone sees it as up to date
-    plog(job, "INFO", f"{final.name}: докачан, MD5 совпал")
+    plog(job, "INFO", _("{0}: докачан, MD5 совпал").format(final.name))
 
 
 def prep_download(jid, port):
@@ -691,7 +745,7 @@ def prep_download(jid, port):
             try:
                 resume_partial(job, api, stats, p, final)
             except Exception as e:
-                plog(job, "NOTICE", f"{final.name}: докачка не удалась ({e})")
+                plog(job, "NOTICE", _("{0}: докачка не удалась ({1})").format(final.name, e))
     finally:
         stats.close()
 
@@ -744,9 +798,10 @@ def set_tray_autostart(on):
 
 def human(n):
     n = float(n or 0)
-    for unit in ("Б", "КБ", "МБ", "ГБ", "ТБ"):
-        if abs(n) < 1024 or unit == "ТБ":
-            return f"{n:.0f} {unit}" if unit == "Б" else f"{n:.1f} {unit}".replace(".", ",")
+    units = (_("Б"), _("КБ"), _("МБ"), _("ГБ"), _("ТБ"))
+    for i, unit in enumerate(units):
+        if abs(n) < 1024 or i == len(units) - 1:
+            return f"{n:.0f} {unit}" if i == 0 else f"{n:.1f} {unit}".replace(".", DECIMAL)
         n /= 1024
 
 
@@ -757,15 +812,17 @@ def eta_str(sec):
     h, rem = divmod(sec, 3600)
     m, s = divmod(rem, 60)
     if h >= 24:
-        return f"{h // 24} д {h % 24} ч"
+        return _("{0} д {1} ч").format(h // 24, h % 24)
     if h:
-        return f"{h} ч {m:02d} мин"
+        return _("{0} ч {1:02d} мин").format(h, m)
     if m:
-        return f"{m} мин {s:02d} с"
-    return f"{s} с"
+        return _("{0} мин {1:02d} с").format(m, s)
+    return _("{0} с").format(s)
 
 
 def plural(n, one, few, many):
+    if LANG != "ru":
+        return one if n == 1 else many
     if n % 10 == 1 and n % 100 != 11:
         return one
     if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
@@ -776,11 +833,13 @@ def plural(n, one, few, many):
 def status_text(job):
     st = job["status"]
     if st == "running":
-        return "Выгружается" if is_up(job) else "Загружается"
-    return {"paused": "Пауза", "done": "Готово", "error": "Ошибка",
-            "interrupted": "Прервано", "queued": "В очереди"}.get(st, st)
+        return _("Выгружается") if is_up(job) else _("Загружается")
+    return {"paused": _("Пауза"), "done": _("Готово"), "error": _("Ошибка"),
+            "interrupted": _("Прервано"), "queued": _("В очереди")}.get(st, st)
 
-AUTH_EXPIRED = "вход в Google истёк — войдите заново"
+AUTH_EXPIRED_RU = "вход в Google истёк — войдите заново"
+AUTH_EXPIRED = _(AUTH_EXPIRED_RU)
+AUTH_PREFIXES = (AUTH_EXPIRED, AUTH_EXPIRED_RU)  # errors saved by another language
 
 
 def auth_expired(text):
@@ -794,7 +853,7 @@ def rclone_error(err):
     """The most useful line of rclone's stderr, without the timestamp."""
     lines = [l for l in (err or "").splitlines() if l.strip()]
     pick = [l for l in lines if "ERROR" in l or "Failed" in l or "error" in l.lower()]
-    line = (pick or lines or ["неизвестная ошибка"])[-1]
+    line = (pick or lines or [_("неизвестная ошибка")])[-1]
     line = re.sub(r"^\d{4}/\d\d/\d\d \d\d:\d\d:\d\d\s+\w+\s*:\s*", "", line)
     return line[:240]
 
@@ -932,15 +991,15 @@ def run_gui(start_hidden=False):
                 return None
 
         # registration -------------------------------------------------
-        def _name_acquired(self, *_):
+        def _name_acquired(self, *_a):
             self.have_name = True
             self._register()
 
-        def _watcher_up(self, *_):
+        def _watcher_up(self, *_a):
             self.watcher = True
             self._register()
 
-        def _watcher_down(self, *_):
+        def _watcher_down(self, *_a):
             self.watcher = False
             self.registered = False
 
@@ -1102,8 +1161,7 @@ def run_gui(start_hidden=False):
             size, done = t.get("size") or 0, t.get("bytes") or 0
             self.bar.set_fraction(done / size if size > 0 else 0)
             eta = t.get("eta")
-            self.info.set_text(f"{t.get('percentage', 0)}% · {human(done)} из {human(size)} · "
-                               f"{human(t.get('speed', 0))}/с" + (f" · {eta_str(eta)}" if eta else ""))
+            self.info.set_text(_("{0}% · {1} из {2} · {3}/с").format(t.get('percentage', 0), human(done), human(size), human(t.get('speed', 0))) + (f" · {eta_str(eta)}" if eta else ""))
 
     class JobCard(Gtk.Box):
         def __init__(self, win, job):
@@ -1142,14 +1200,14 @@ def run_gui(start_hidden=False):
 
             self.btn_toggle = Gtk.Button(valign=Gtk.Align.CENTER)
             self.btn_toggle.add_css_class("circular")
-            self.btn_toggle.connect("clicked", lambda *_: win.toggle_job(self.jid))
+            self.btn_toggle.connect("clicked", lambda *_a: win.toggle_job(self.jid))
             btn_open = Gtk.Button(icon_name="folder-open-symbolic", valign=Gtk.Align.CENTER,
-                                  tooltip_text="Открыть исходную папку" if self.up else "Открыть папку")
+                                  tooltip_text=_("Открыть исходную папку") if self.up else _("Открыть папку"))
             btn_open.add_css_class("circular")
             btn_open.add_css_class("flat")
-            btn_open.connect("clicked", lambda *_: win.open_folder(self.jid))
+            btn_open.connect("clicked", lambda *_a: win.open_folder(self.jid))
             menu = Gtk.MenuButton(icon_name="view-more-symbolic", valign=Gtk.Align.CENTER,
-                                  tooltip_text="Ещё")
+                                  tooltip_text=_("Ещё"))
             menu.add_css_class("circular")
             menu.add_css_class("flat")
             menu.set_popover(self._build_popover(job))
@@ -1186,7 +1244,7 @@ def run_gui(start_hidden=False):
             self.spark.set_draw_func(self._draw)
             self.append(self.spark)
 
-            self.exp = Gtk.Expander(label="Сейчас передаются", visible=False)
+            self.exp = Gtk.Expander(label=_("Сейчас передаются"), visible=False)
             self.tlist = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, margin_top=8)
             self.tlist.add_css_class("boxed-list")
             self.exp.set_child(self.tlist)
@@ -1197,7 +1255,7 @@ def run_gui(start_hidden=False):
             pop = Gtk.Popover()
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=8,
                           margin_bottom=8, margin_start=8, margin_end=8)
-            lbl = Gtk.Label(label="Ограничение скорости", xalign=0)
+            lbl = Gtk.Label(label=_("Ограничение скорости"), xalign=0)
             lbl.add_css_class("caption-heading")
             box.append(lbl)
             dd = Gtk.DropDown.new_from_strings([o[0] for o in BW_OPTIONS])
@@ -1213,14 +1271,14 @@ def run_gui(start_hidden=False):
                 if destructive:
                     b.add_css_class("destructive-action")
                 b.get_child().set_xalign(0)
-                b.connect("clicked", lambda *_: (pop.popdown(), cb(self.jid)))
+                b.connect("clicked", lambda *_a: (pop.popdown(), cb(self.jid)))
                 box.append(b)
 
-            item("Перепроверить и дозалить" if self.up else "Перепроверить и докачать",
+            item(_("Перепроверить и дозалить") if self.up else _("Перепроверить и докачать"),
                  self.win.restart_job)
-            item("Открыть на Google Диске", self.win.open_on_drive)
-            item("Открыть лог", self.win.open_log)
-            item("Убрать из списка…", self.win.ask_remove, destructive=True)
+            item(_("Открыть на Google Диске"), self.win.open_on_drive)
+            item(_("Открыть лог"), self.win.open_log)
+            item(_("Убрать из списка…"), self.win.ask_remove, destructive=True)
             pop.set_child(box)
             return pop
 
@@ -1256,7 +1314,7 @@ def run_gui(start_hidden=False):
             if self.up:
                 d = job["dest"].strip("/")
                 where = f"{acct}: /{d}" if not job.get("dest_id") else \
-                    f"{acct}: папка по ссылке" + (f" /{d}" if d else "")
+                    _("{0}: папка по ссылке").format(acct) + (f" /{d}" if d else "")
                 return f"{job['src']}  →  {where}"
             multi = len(self.win.app.accounts) > 1
             return job["dest"] + (f"  ·  {acct}" if multi else "")
@@ -1272,16 +1330,16 @@ def run_gui(start_hidden=False):
             self.pill.set_text(status_text(job))
             if st == "running":
                 self.btn_toggle.set_icon_name("media-playback-pause-symbolic")
-                self.btn_toggle.set_tooltip_text("Пауза")
+                self.btn_toggle.set_tooltip_text(_("Пауза"))
                 self.btn_toggle.remove_css_class("suggested-action")
             else:
                 self.btn_toggle.set_icon_name("media-playback-start-symbolic")
-                self.btn_toggle.set_tooltip_text("Продолжить")
+                self.btn_toggle.set_tooltip_text(_("Продолжить"))
                 self.btn_toggle.add_css_class("suggested-action")
             self.btn_toggle.set_visible(st != "done")
             self.err.set_visible(st == "error" and bool(job.get("error")))
             self.err.set_text(job.get("error", ""))
-            disk = f"на диске {human(self.disk)}" if self.disk is not None and not self.up else ""
+            disk = _("на диске {0}").format(human(self.disk)) if self.disk is not None and not self.up else ""
 
             if stats is not None and st == "running":
                 self.last_stats = stats
@@ -1292,23 +1350,23 @@ def run_gui(start_hidden=False):
             s = self.last_stats or {}
             if st == "done":
                 self.bar.set_fraction(1)
-                self.lbl_bytes.set_text(("Выгрузка завершена" if self.up else "Загрузка завершена")
+                self.lbl_bytes.set_text((_("Выгрузка завершена") if self.up else _("Загрузка завершена"))
                                         + (f" · {disk}" if disk else ""))
             elif st == "running":
                 self.bar.pulse()
-                self.lbl_bytes.set_text("Запуск rclone…")
+                self.lbl_bytes.set_text(_("Запуск rclone…"))
             else:
                 tot = s.get("totalBytes") or 0
                 self.bar.set_fraction((s.get("bytes", 0) / tot) if tot else 0)
-                hint = {"paused": "На паузе", "interrupted": "Прервано — нажмите ▶, чтобы продолжить",
-                        "error": "Остановлено с ошибкой", "queued": "Ожидает запуска"}.get(st, "")
+                hint = {"paused": _("На паузе"), "interrupted": _("Прервано — нажмите ▶, чтобы продолжить"),
+                        "error": _("Остановлено с ошибкой"), "queued": _("Ожидает запуска")}.get(st, "")
                 self.lbl_bytes.set_text(hint + (f" · {disk}" if disk else ""))
             self.lbl_speed.set_text("")
             if st == "done":
-                self.lbl_files.set_text("Файлы на Google Диске" if self.up else f"Сохранено в {job['dest']}")
+                self.lbl_files.set_text(_("Файлы на Google Диске") if self.up else _("Сохранено в {0}").format(job['dest']))
             else:
-                self.lbl_files.set_text("Уже выгруженные файлы при продолжении пропускаются." if self.up
-                                        else "Уже скачанные файлы при продолжении пропускаются.")
+                self.lbl_files.set_text(_("Уже выгруженные файлы при продолжении пропускаются.") if self.up
+                                        else _("Уже скачанные файлы при продолжении пропускаются."))
             self.exp.set_visible(False)
             self.spark.queue_draw()
 
@@ -1319,22 +1377,22 @@ def run_gui(start_hidden=False):
             self.history.append(speed)
             if total > 0:
                 self.bar.set_fraction(min(done / total, 1))
-                self.lbl_bytes.set_text(f"{human(done)} из {human(total)} · {done / total * 100:.1f}%".replace(".", ","))
+                self.lbl_bytes.set_text(_("{0} из {1} · {2:.1f}%").format(human(done), human(total), done / total * 100).replace(".", DECIMAL))
             else:
                 self.bar.pulse()
-                self.lbl_bytes.set_text(f"Подготовка… проверено файлов: {s.get('checks', 0)}")
+                self.lbl_bytes.set_text(_("Подготовка… проверено файлов: {0}").format(s.get('checks', 0)))
             eta = s.get("eta")
             if eta is None and speed > 0 and total > done:
                 eta = (total - done) / speed
-            self.lbl_speed.set_text(f"{human(speed)}/с · {eta_str(eta)}" if transferring else "")
-            parts = [f"Файлы: {s.get('transfers', 0)} из {s.get('totalTransfers', 0)}",
-                     f"проверено: {s.get('checks', 0)}"]
+            self.lbl_speed.set_text(_("{0}/с · {1}").format(human(speed), eta_str(eta)) if transferring else "")
+            parts = [_("Файлы: {0} из {1}").format(s.get('transfers', 0), s.get('totalTransfers', 0)),
+                     _("проверено: {0}").format(s.get('checks', 0))]
             if disk:
                 parts.append(disk)
             if self.history:
-                parts.append(f"пик {human(max(self.history))}/с")
+                parts.append(_("пик {0}/с").format(human(max(self.history))))
             if s.get("errors"):
-                parts.append(f"ошибок: {s['errors']}")
+                parts.append(_("ошибок: {0}").format(s['errors']))
             self.lbl_files.set_text(" · ".join(parts))
             self.lbl_files.set_tooltip_text(s.get("lastError") or None)
             self._update_transfers(transferring)
@@ -1355,12 +1413,12 @@ def run_gui(start_hidden=False):
                 if name not in names:
                     self.tlist.remove(self.trows.pop(name))
             self.exp.set_visible(bool(transferring))
-            self.exp.set_label(f"Сейчас передаются ({len(transferring)})")
+            self.exp.set_label(_("Сейчас передаются ({0})").format(len(transferring)))
 
     def account_row(app):
         """ComboRow to pick one of the Google accounts (defaults to the active one)."""
         names = [a["name"] for a in app.accounts]
-        row = Adw.ComboRow(title="Аккаунт", model=Gtk.StringList.new([app.account_label(n) for n in names]))
+        row = Adw.ComboRow(title=_("Аккаунт"), model=Gtk.StringList.new([app.account_label(n) for n in names]))
         if app.active in names:
             row.set_selected(names.index(app.active))
         row.names = names
@@ -1370,35 +1428,35 @@ def run_gui(start_hidden=False):
         """New download from a Google Drive link."""
 
         def __init__(self, win):
-            super().__init__(title="Новая загрузка", content_width=540)
+            super().__init__(title=_("Новая загрузка"), content_width=540)
             self.win = win
             self.custom_dest = None
             tv = Adw.ToolbarView()
             tv.add_top_bar(Adw.HeaderBar())
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20, margin_top=12,
                           margin_bottom=24, margin_start=18, margin_end=18)
-            grp = Adw.PreferencesGroup(description="Ссылка на папку или файл. "
-                                                   "Уже скачанные файлы при повторе пропускаются.")
-            self.link = Adw.EntryRow(title="Ссылка Google Drive")
+            grp = Adw.PreferencesGroup(description=_("Ссылка на папку или файл. "
+                                                   "Уже скачанные файлы при повторе пропускаются."))
+            self.link = Adw.EntryRow(title=_("Ссылка Google Drive"))
             self.link.connect("changed", self._changed)
-            self.name = Adw.EntryRow(title="Название (необязательно)")
+            self.name = Adw.EntryRow(title=_("Название (необязательно)"))
             self.name.connect("changed", self._changed)
-            self.dest = Adw.ActionRow(title="Сохранить в")
+            self.dest = Adw.ActionRow(title=_("Сохранить в"))
             self.dest.add_css_class("property")
             pick = Gtk.Button(icon_name="folder-open-symbolic", valign=Gtk.Align.CENTER,
-                              tooltip_text="Выбрать папку")
+                              tooltip_text=_("Выбрать папку"))
             pick.add_css_class("flat")
             pick.connect("clicked", self._pick)
             self.dest.add_suffix(pick)
             self.dest.set_activatable_widget(pick)
             self.acct = account_row(win.app)
             self.threads = Adw.SpinRow.new_with_range(1, 16, 1)
-            self.threads.set_title("Файлов одновременно")
-            self.threads.set_subtitle("Больше — быстрее на множестве мелких файлов")
+            self.threads.set_title(_("Файлов одновременно"))
+            self.threads.set_subtitle(_("Больше — быстрее на множестве мелких файлов"))
             self.threads.set_value(4)
             for r in (self.link, self.name, self.dest, self.acct, self.threads):
                 grp.add(r)
-            self.start = Gtk.Button(label="Начать загрузку", halign=Gtk.Align.CENTER, sensitive=False)
+            self.start = Gtk.Button(label=_("Начать загрузку"), halign=Gtk.Align.CENTER, sensitive=False)
             self.start.add_css_class("pill")
             self.start.add_css_class("suggested-action")
             self.start.connect("clicked", self._start)
@@ -1423,7 +1481,7 @@ def run_gui(start_hidden=False):
             base = re.sub(r'[/\\:*?"<>|]', "_", name) if name else (f"drive-{src[:8]}" if src else "drive")
             return str(HOME / "Downloads" / base)
 
-        def _changed(self, *_):
+        def _changed(self, *_a):
             kind, _src = parse_link(self.link.get_text())
             ok = kind is not None
             if self.link.get_text() and not ok:
@@ -1433,8 +1491,8 @@ def run_gui(start_hidden=False):
             self.dest.set_subtitle(GLib.markup_escape_text(self.custom_dest or self._default_dest()))
             self.start.set_sensitive(ok and bool(self.acct.names))
 
-        def _pick(self, *_):
-            fd = Gtk.FileDialog(title="Куда сохранить",
+        def _pick(self, *_a):
+            fd = Gtk.FileDialog(title=_("Куда сохранить"),
                                 initial_folder=Gio.File.new_for_path(str(HOME / "Downloads")))
             fd.select_folder(self.win, None, self._picked)
 
@@ -1447,7 +1505,7 @@ def run_gui(start_hidden=False):
                 self.custom_dest = f.get_path()
                 self._changed()
 
-        def _start(self, *_):
+        def _start(self, *_a):
             kind, src = parse_link(self.link.get_text())
             dest = self.custom_dest or self._default_dest()
             name = self.name.get_text().strip() or Path(dest).name
@@ -1462,15 +1520,15 @@ def run_gui(start_hidden=False):
         """Pick a folder in "My Drive" of an account."""
 
         def __init__(self, win, remote, path, on_pick):
-            super().__init__(title="Папка на Google Диске", content_width=460, content_height=560)
+            super().__init__(title=_("Папка на Google Диске"), content_width=460, content_height=560)
             self.win, self.remote, self.on_pick = win, remote, on_pick
             self.path = path.strip("/")
             tv = Adw.ToolbarView()
             hb = Adw.HeaderBar()
-            self.btn_up = Gtk.Button(icon_name="go-up-symbolic", tooltip_text="На уровень выше")
-            self.btn_up.connect("clicked", lambda *_: self.go(posixpath.dirname(self.path)))
+            self.btn_up = Gtk.Button(icon_name="go-up-symbolic", tooltip_text=_("На уровень выше"))
+            self.btn_up.connect("clicked", lambda *_a: self.go(posixpath.dirname(self.path)))
             hb.pack_start(self.btn_up)
-            self.wt = Adw.WindowTitle(title="Мой диск")
+            self.wt = Adw.WindowTitle(title=_("Мой диск"))
             hb.set_title_widget(self.wt)
             tv.add_top_bar(hb)
             self.stack = Gtk.Stack()
@@ -1487,8 +1545,8 @@ def run_gui(start_hidden=False):
             self.stack.add_named(self.msg, "msg")
             tv.set_content(self.stack)
             bottom = Gtk.Box(spacing=8, margin_top=8, margin_bottom=12, margin_start=12, margin_end=12)
-            self.newname = Gtk.Entry(placeholder_text="Новая папка (создастся при выгрузке)", hexpand=True)
-            choose = Gtk.Button(label="Выбрать")
+            self.newname = Gtk.Entry(placeholder_text=_("Новая папка (создастся при выгрузке)"), hexpand=True)
+            choose = Gtk.Button(label=_("Выбрать"))
             choose.add_css_class("suggested-action")
             choose.connect("clicked", self._choose)
             bottom.append(self.newname)
@@ -1521,13 +1579,13 @@ def run_gui(start_hidden=False):
             while (row := self.lb.get_first_child()) is not None:
                 self.lb.remove(row)
             if items is None:
-                self.msg.set_title("Не удалось открыть папку")
+                self.msg.set_title(_("Не удалось открыть папку"))
                 self.msg.set_description(None)
                 self.stack.set_visible_child_name("msg")
                 return False
             if not items:
-                self.msg.set_title("Вложенных папок нет")
-                self.msg.set_description("Нажмите «Выбрать», чтобы выгрузить сюда")
+                self.msg.set_title(_("Вложенных папок нет"))
+                self.msg.set_description(_("Нажмите «Выбрать», чтобы выгрузить сюда"))
                 self.stack.set_visible_child_name("msg")
                 return False
             for it in sorted(items, key=lambda i: i["Name"].lower()):
@@ -1539,7 +1597,7 @@ def run_gui(start_hidden=False):
             self.stack.set_visible_child_name("list")
             return False
 
-        def _choose(self, *_):
+        def _choose(self, *_a):
             new = self.newname.get_text().strip().strip("/")
             self.on_pick(posixpath.join(self.path, new) if new else self.path)
             self.close()
@@ -1548,7 +1606,7 @@ def run_gui(start_hidden=False):
         """Upload local files or folders to an account's Google Drive."""
 
         def __init__(self, win, paths=None, dest=None):
-            super().__init__(title="Выгрузка на Google Диск", content_width=560)
+            super().__init__(title=_("Выгрузка на Google Диск"), content_width=560)
             self.win, self.app = win, win.app
             self.paths = []
             tv = Adw.ToolbarView()
@@ -1556,49 +1614,49 @@ def run_gui(start_hidden=False):
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20, margin_top=12,
                           margin_bottom=24, margin_start=18, margin_end=18)
 
-            src = Adw.PreferencesGroup(title="Что выгрузить",
-                                       description="Можно также перетащить файлы прямо в окно.")
-            self.src_row = Adw.ActionRow(title="Ничего не выбрано")
+            src = Adw.PreferencesGroup(title=_("Что выгрузить"),
+                                       description=_("Можно также перетащить файлы прямо в окно."))
+            self.src_row = Adw.ActionRow(title=_("Ничего не выбрано"))
             self.src_row.add_css_class("property")
-            b1 = Gtk.Button(label="Файлы…", valign=Gtk.Align.CENTER)
+            b1 = Gtk.Button(label=_("Файлы…"), valign=Gtk.Align.CENTER)
             b1.connect("clicked", self._pick_files)
-            b2 = Gtk.Button(label="Папки…", valign=Gtk.Align.CENTER)
+            b2 = Gtk.Button(label=_("Папки…"), valign=Gtk.Align.CENTER)
             b2.connect("clicked", self._pick_dirs)
             clear = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER,
-                               tooltip_text="Очистить выбор")
+                               tooltip_text=_("Очистить выбор"))
             clear.add_css_class("flat")
-            clear.connect("clicked", lambda *_: self.set_paths([]))
+            clear.connect("clicked", lambda *_a: self.set_paths([]))
             for b in (b1, b2, clear):
                 self.src_row.add_suffix(b)
             src.add(self.src_row)
 
-            dst = Adw.PreferencesGroup(title="Куда")
+            dst = Adw.PreferencesGroup(title=_("Куда"))
             self.acct = account_row(self.app)
             self.acct.connect("notify::selected", self._changed)
-            self.dest = Adw.EntryRow(title="Папка на Диске (путь или ссылка на папку)",
+            self.dest = Adw.EntryRow(title=_("Папка на Диске (путь или ссылка на папку)"),
                                      text=dest if dest is not None else setting("upload_dest", "Drive Loader"))
             self.dest.connect("changed", self._changed)
             browse = Gtk.Button(icon_name="folder-open-symbolic", valign=Gtk.Align.CENTER,
-                                tooltip_text="Выбрать папку на Диске")
+                                tooltip_text=_("Выбрать папку на Диске"))
             browse.add_css_class("flat")
             browse.connect("clicked", self._browse)
             self.dest.add_suffix(browse)
             self.threads = Adw.SpinRow.new_with_range(1, 16, 1)
-            self.threads.set_title("Файлов одновременно")
+            self.threads.set_title(_("Файлов одновременно"))
             self.threads.set_value(4)
             for r in (self.acct, self.dest, self.threads):
                 dst.add(r)
-            self.warn = Adw.ActionRow(title="Аккаунт подключён только на чтение",
-                                      subtitle="Для выгрузки войдите заново с правом записи",
+            self.warn = Adw.ActionRow(title=_("Аккаунт подключён только на чтение"),
+                                      subtitle=_("Для выгрузки войдите заново с правом записи"),
                                       visible=False)
             self.warn.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic"))
-            relog = Gtk.Button(label="Войти заново", valign=Gtk.Align.CENTER)
+            relog = Gtk.Button(label=_("Войти заново"), valign=Gtk.Align.CENTER)
             relog.add_css_class("suggested-action")
             relog.connect("clicked", self._relogin)
             self.warn.add_suffix(relog)
             dst.add(self.warn)
 
-            self.start = Gtk.Button(label="Начать выгрузку", halign=Gtk.Align.CENTER, sensitive=False)
+            self.start = Gtk.Button(label=_("Начать выгрузку"), halign=Gtk.Align.CENTER, sensitive=False)
             self.start.add_css_class("pill")
             self.start.add_css_class("suggested-action")
             self.start.connect("clicked", self._start)
@@ -1620,35 +1678,35 @@ def run_gui(start_hidden=False):
             self.paths = seen
             n = len(self.paths)
             if not n:
-                self.src_row.set_title("Ничего не выбрано")
+                self.src_row.set_title(_("Ничего не выбрано"))
                 self.src_row.set_subtitle("")
             elif n == 1:
                 self.src_row.set_title(GLib.markup_escape_text(os.path.basename(self.paths[0].rstrip("/"))) +
-                                       (" (папка)" if os.path.isdir(self.paths[0]) else ""))
+                                       (_(" (папка)") if os.path.isdir(self.paths[0]) else ""))
                 self.src_row.set_subtitle(GLib.markup_escape_text(self.paths[0]))
             else:
                 dirs = sum(os.path.isdir(p) for p in self.paths)
                 files = n - dirs
                 parts = []
                 if files:
-                    parts.append(f"{files} {plural(files, 'файл', 'файла', 'файлов')}")
+                    parts.append(f"{files} {plural(files, _('файл'), _('файла'), _('файлов'))}")
                 if dirs:
-                    parts.append(f"{dirs} {plural(dirs, 'папка', 'папки', 'папок')}")
-                self.src_row.set_title(" и ".join(parts))
+                    parts.append(f"{dirs} {plural(dirs, _('папка'), _('папки'), _('папок'))}")
+                self.src_row.set_title(_(" и ").join(parts))
                 self.src_row.set_subtitle(GLib.markup_escape_text(os.path.commonpath(self.paths)))
             self._changed()
 
-        def _changed(self, *_):
+        def _changed(self, *_a):
             r = self.remote()
             ro = bool(r) and "readonly" in self.app.account_scope(r)
             self.warn.set_visible(ro)
             self.start.set_sensitive(bool(self.paths) and bool(r) and not ro)
 
-        def _pick_files(self, *_):
-            Gtk.FileDialog(title="Файлы для выгрузки").open_multiple(self.win, None, self._picked, False)
+        def _pick_files(self, *_a):
+            Gtk.FileDialog(title=_("Файлы для выгрузки")).open_multiple(self.win, None, self._picked, False)
 
-        def _pick_dirs(self, *_):
-            Gtk.FileDialog(title="Папки для выгрузки").select_multiple_folders(self.win, None, self._picked, True)
+        def _pick_dirs(self, *_a):
+            Gtk.FileDialog(title=_("Папки для выгрузки")).select_multiple_folders(self.win, None, self._picked, True)
 
         def _picked(self, fd, res, dirs):
             try:
@@ -1657,17 +1715,17 @@ def run_gui(start_hidden=False):
                 return
             self.set_paths(self.paths + [f.get_path() for f in files if f.get_path()])
 
-        def _browse(self, *_):
+        def _browse(self, *_a):
             if self.remote():
                 cur = self.dest.get_text().strip()
                 start = "" if "google.com" in cur else cur
                 RemoteBrowser(self.win, self.remote(), start, self.dest.set_text).present(self)
 
-        def _relogin(self, *_):
+        def _relogin(self, *_a):
             self.app.login(self.remote(), readonly=False)
             self.close()
 
-        def _start(self, *_):
+        def _start(self, *_a):
             remote = self.remote()
             text = self.dest.get_text().strip()
             kind, fid = parse_link(text) if "google.com" in text else (None, None)
@@ -1688,7 +1746,7 @@ def run_gui(start_hidden=False):
             if files:
                 root = os.path.dirname(files[0]) if len(files) == 1 else os.path.commonpath(files)
                 rel = [os.path.relpath(f, root) for f in files]
-                name = os.path.basename(files[0]) + (f" и ещё {len(files) - 1}" if len(files) > 1 else "")
+                name = os.path.basename(files[0]) + (_(" и ещё {0}").format(len(files) - 1) if len(files) > 1 else "")
                 jobs.append({**common, "id": uuid.uuid4().hex[:8], "name": name, "src": root,
                              "dest": base, "files": rel})
             for job in jobs:
@@ -1711,7 +1769,7 @@ def run_gui(start_hidden=False):
     def fmt_date(s):
         try:
             dt = GLib.DateTime.new_from_iso8601(s, None)
-            return dt.to_local().format("%d.%m.%Y %H:%M") if dt else ""
+            return dt.to_local().format(_("%d.%m.%Y %H:%M")) if dt else ""
         except Exception:
             return ""
 
@@ -1734,9 +1792,9 @@ def run_gui(start_hidden=False):
     def item_info(it):
         size = it.get("Size", -1)
         if it["IsDir"]:
-            return "Папка"
+            return _("Папка")
         if size is None or size < 0:
-            return "Документ Google"
+            return _("Документ Google")
         return human(size)
 
     class Thumbs:
@@ -1752,7 +1810,7 @@ def run_gui(start_hidden=False):
             self.mem = OrderedDict()  # (fid, mtime, spec) -> Gdk.Texture
             self.q = queue.LifoQueue()  # newest folder first
             THUMB_DIR.mkdir(parents=True, exist_ok=True)
-            for _ in range(4):
+            for _a in range(4):
                 threading.Thread(target=self._worker, daemon=True).start()
             threading.Thread(target=self._prune, daemon=True).start()
 
@@ -1778,7 +1836,7 @@ def run_gui(start_hidden=False):
             def work():
                 links, token = {}, None
                 try:
-                    for _ in range(20):
+                    for _a in range(20):
                         params = {"q": q, "pageSize": "1000", "supportsAllDrives": "true",
                                   "includeItemsFromAllDrives": "true",
                                   "fields": "nextPageToken,files(id,thumbnailLink)"}
@@ -1848,8 +1906,8 @@ def run_gui(start_hidden=False):
         def _prune(limit=300 << 20):
             try:
                 files = sorted((f.stat().st_atime, f.stat().st_size, f) for f in THUMB_DIR.iterdir())
-                total = sum(s for _, s, _ in files)
-                for _, size, f in files:
+                total = sum(s for _a, s, _a in files)
+                for _a, size, f in files:
                     if total <= limit:
                         break
                     f.unlink(missing_ok=True)
@@ -2018,21 +2076,21 @@ def run_gui(start_hidden=False):
             hb.set_title_widget(self.wtitle)
             nav = Gtk.Box()
             nav.add_css_class("linked")
-            self.prev = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Предыдущий (←)")
-            self.next = Gtk.Button(icon_name="go-next-symbolic", tooltip_text="Следующий (→)")
-            self.prev.connect("clicked", lambda *_: self.step(-1))
-            self.next.connect("clicked", lambda *_: self.step(1))
+            self.prev = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text=_("Предыдущий (←)"))
+            self.next = Gtk.Button(icon_name="go-next-symbolic", tooltip_text=_("Следующий (→)"))
+            self.prev.connect("clicked", lambda *_a: self.step(-1))
+            self.next.connect("clicked", lambda *_a: self.step(1))
             nav.append(self.prev)
             nav.append(self.next)
             hb.pack_start(nav)
-            more = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Ещё")
+            more = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text=_("Ещё"))
             m = Gio.Menu()
-            m.append("Копировать ссылку", "pv.link")
-            m.append("Скачать в…", "pv.download-to")
+            m.append(_("Копировать ссылку"), "pv.link")
+            m.append(_("Скачать в…"), "pv.download-to")
             more.set_menu_model(m)
-            web = Gtk.Button(icon_name="web-browser-symbolic", tooltip_text="Открыть в браузере",
+            web = Gtk.Button(icon_name="web-browser-symbolic", tooltip_text=_("Открыть в браузере"),
                              action_name="pv.web")
-            dl = Gtk.Button(icon_name=ICON_DOWN, tooltip_text="Скачать в «Загрузки»", action_name="pv.download")
+            dl = Gtk.Button(icon_name=ICON_DOWN, tooltip_text=_("Скачать в «Загрузки»"), action_name="pv.download")
             for w in (more, web, dl):
                 hb.pack_end(w)
             tv.add_top_bar(hb)
@@ -2057,8 +2115,8 @@ def run_gui(start_hidden=False):
                                      left_margin=14, right_margin=14)
             self.text.add_css_class("preview-text")
             self.stack.add_named(Gtk.ScrolledWindow(child=self.text), "text")
-            self.none = Adw.StatusPage(description="Для этого файла предпросмотра нет")
-            nb = Gtk.Button(label="Открыть в браузере", halign=Gtk.Align.CENTER, action_name="pv.web")
+            self.none = Adw.StatusPage(description=_("Для этого файла предпросмотра нет"))
+            nb = Gtk.Button(label=_("Открыть в браузере"), halign=Gtk.Align.CENTER, action_name="pv.web")
             nb.add_css_class("pill")
             self.none.set_child(nb)
             self.stack.add_named(self.none, "none")
@@ -2070,12 +2128,12 @@ def run_gui(start_hidden=False):
             self.caption.add_css_class("caption")
             self.pager = Gtk.Box(visible=False, margin_end=8, valign=Gtk.Align.CENTER)
             self.pager.add_css_class("linked")
-            self.pg_prev = Gtk.Button(icon_name="go-up-symbolic", tooltip_text="Предыдущая страница (↑)")
-            self.pg_next = Gtk.Button(icon_name="go-down-symbolic", tooltip_text="Следующая страница (↓)")
+            self.pg_prev = Gtk.Button(icon_name="go-up-symbolic", tooltip_text=_("Предыдущая страница (↑)"))
+            self.pg_next = Gtk.Button(icon_name="go-down-symbolic", tooltip_text=_("Следующая страница (↓)"))
             self.pg_label = Gtk.Label(width_chars=9)
             self.pg_label.add_css_class("numeric")
-            self.pg_prev.connect("clicked", lambda *_: self.page_step(-1))
-            self.pg_next.connect("clicked", lambda *_: self.page_step(1))
+            self.pg_prev.connect("clicked", lambda *_a: self.page_step(-1))
+            self.pg_next.connect("clicked", lambda *_a: self.page_step(1))
             for w in (self.pg_prev, self.pg_label, self.pg_next):
                 w.add_css_class("flat")
                 self.pager.append(w)
@@ -2102,7 +2160,7 @@ def run_gui(start_hidden=False):
             sp.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("space"),
                                              Gtk.CallbackAction.new(lambda *_a: self._toggle_play())))
             self.add_controller(sp)
-            self.connect("closed", lambda *_: self._reset(-1))
+            self.connect("closed", lambda *_a: self._reset(-1))
             self.show_item()
 
         def _media_page(self):
@@ -2124,11 +2182,11 @@ def run_gui(start_hidden=False):
             box.append(self.mtitle)
             box.append(self.martist)
             row = Gtk.Box(spacing=10, valign=Gtk.Align.CENTER)
-            self.mplay = Gtk.Button(icon_name="media-playback-start-symbolic", tooltip_text="Играть / пауза (Пробел)",
+            self.mplay = Gtk.Button(icon_name="media-playback-start-symbolic", tooltip_text=_("Играть / пауза (Пробел)"),
                                     valign=Gtk.Align.CENTER)
             self.mplay.add_css_class("circular")
             self.mplay.add_css_class("suggested-action")
-            self.mplay.connect("clicked", lambda *_: self._toggle_play())
+            self.mplay.connect("clicked", lambda *_a: self._toggle_play())
             self.mpos, self.mdur = Gtk.Label(label="0:00"), Gtk.Label(label="0:00")
             for l in (self.mpos, self.mdur):
                 l.add_css_class("numeric")
@@ -2153,11 +2211,11 @@ def run_gui(start_hidden=False):
 
         def _copy(self, url):
             self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(url))
-            self._toast("Ссылка скопирована")
+            self._toast(_("Ссылка скопирована"))
 
         def _download(self, it):
             self.br._download(it, HOME / "Downloads")
-            self._toast(f"Скачивание «{it['Name']}» начато")
+            self._toast(_("Скачивание «{0}» начато").format(it['Name']))
 
         def step(self, d):
             i = self.idx + d
@@ -2185,7 +2243,7 @@ def run_gui(start_hidden=False):
             info = item_info(it)
             self.wtitle.set_title(it["Name"])
             self.wtitle.set_subtitle(f"{info} · {date}" if date else info)
-            self.caption.set_text(f"{self.idx + 1} из {len(self.items)}")
+            self.caption.set_text(_("{0} из {1}").format(self.idx + 1, len(self.items)))
             alive = lambda: gen == self.gen
             mt = it.get("MimeType") or ""
             size = it.get("Size") or 0
@@ -2200,9 +2258,9 @@ def run_gui(start_hidden=False):
                                 or office):
                 self._load_pdf(it, alive, link)
             elif link:
-                note = ("Кадр из видео — для просмотра установите gst-plugin-gtk4" if mt.startswith("video/") else
-                        "Первый слайд — полный просмотр с LibreOffice" if is_office(it) else
-                        "Первая страница" if not mt.startswith("image/") else "")
+                note = (_("Кадр из видео — для просмотра установите gst-plugin-gtk4") if mt.startswith("video/") else
+                        _("Первый слайд — полный просмотр с LibreOffice") if is_office(it) else
+                        _("Первая страница") if not mt.startswith("image/") else "")
                 self.br.thumbs.get(link, it, "s1600", lambda t: self._show_pic(t, note), alive)
             elif mt.startswith("image/") and 0 < size <= (30 << 20):
                 self._load_image(it, alive)
@@ -2213,14 +2271,14 @@ def run_gui(start_hidden=False):
             self.pic.set_paintable(tex)
             self.stack.set_visible_child_name("pic")
             if note:
-                self.caption.set_text(f"{self.idx + 1} из {len(self.items)} · {note}")
+                self.caption.set_text(_("{0} из {1} · {2}").format(self.idx + 1, len(self.items), note))
 
         def _show_none(self, it, why=None):
             theme = Gtk.IconTheme.get_for_display(self.get_display())
             self.none.set_paintable(theme.lookup_by_gicon(item_icon(it), 128, self.get_scale_factor(),
                                                           Gtk.TextDirection.NONE, 0))
             self.none.set_title(it["Name"])
-            self.none.set_description(why or "Для этого файла предпросмотра нет")
+            self.none.set_description(why or _("Для этого файла предпросмотра нет"))
             self.stack.set_visible_child_name("none")
 
         def _fetch(self, it, alive, rng, done):
@@ -2241,21 +2299,20 @@ def run_gui(start_hidden=False):
             if not it.get("Size"):
                 self.text.get_buffer().set_text("")
                 self.stack.set_visible_child_name("text")
-                self.caption.set_text(f"{self.idx + 1} из {len(self.items)} · файл пуст")
+                self.caption.set_text(_("{0} из {1} · файл пуст").format(self.idx + 1, len(self.items)))
                 return
             limit = 256 << 10
 
             def done(data, err):
                 if data is None:
-                    self._show_none(it, f"Не удалось загрузить: {err[:200]}")
+                    self._show_none(it, _("Не удалось загрузить: {0}").format(err[:200]))
                 elif b"\0" in data[:8192]:
-                    self._show_none(it, "Похоже, это не текстовый файл")
+                    self._show_none(it, _("Похоже, это не текстовый файл"))
                 else:
                     self.text.get_buffer().set_text(data[:limit].decode("utf-8", errors="replace"))
                     self.stack.set_visible_child_name("text")
                     if it["Size"] > limit:
-                        self.caption.set_text(f"{self.idx + 1} из {len(self.items)} · "
-                                              f"показаны первые {human(limit)}")
+                        self.caption.set_text(_("{0} из {1} · показаны первые {2}").format(self.idx + 1, len(self.items), human(limit)))
 
             self._fetch(it, alive, f"0-{limit - 1}", done)
 
@@ -2264,8 +2321,8 @@ def run_gui(start_hidden=False):
                 try:
                     self._show_pic(Gdk.Texture.new_from_bytes(GLib.Bytes.new(data)))
                 except Exception:
-                    self._show_none(it, "Не удалось показать изображение" if data else
-                                    f"Не удалось загрузить: {(err or '')[:200]}")
+                    self._show_none(it, _("Не удалось показать изображение") if data else
+                                    _("Не удалось загрузить: {0}").format((err or '')[:200]))
 
             self._fetch(it, alive, None, done)
 
@@ -2325,7 +2382,7 @@ def run_gui(start_hidden=False):
             elif sig == "error":
                 msg = a[0].message if a and hasattr(a[0], "message") else str(a[:1])
                 self._reset()
-                self._show_none(it, f"Не удалось воспроизвести: {msg[:200]}")
+                self._show_none(it, _("Не удалось воспроизвести: {0}").format(msg[:200]))
             elif sig == "media-info-updated":
                 self._media_info(a[0])
 
@@ -2382,7 +2439,7 @@ def run_gui(start_hidden=False):
                 with api.open(url, tries=4) as r:
                     data = r.read((100 << 20) + 1)
                 if len(data) > (100 << 20):
-                    raise RuntimeError("файл больше 100 МБ")
+                    raise RuntimeError(_("файл больше 100 МБ"))
                 if mt == "application/pdf" or is_gapp(it):
                     return data
                 return office_to_pdf(it["Name"], data)
@@ -2401,9 +2458,9 @@ def run_gui(start_hidden=False):
             if doc is None or doc.get_n_pages() == 0:
                 if link:
                     self.br.thumbs.get(link, it, "s1600",
-                                       lambda t: self._show_pic(t, "Первая страница"), alive)
+                                       lambda t: self._show_pic(t, _("Первая страница")), alive)
                 else:
-                    self._show_none(it, f"Не удалось открыть: {(err or 'пустой документ')[:200]}")
+                    self._show_none(it, _("Не удалось открыть: {0}").format((err or _('пустой документ'))[:200]))
                 return
             self.doc, self.page = doc, 0
             self.pager.set_visible(doc.get_n_pages() > 1)
@@ -2424,7 +2481,7 @@ def run_gui(start_hidden=False):
             self.pg_label.set_text(f"{p + 1} / {n}")
             self.pg_prev.set_sensitive(p > 0)
             self.pg_next.set_sensitive(p < n - 1)
-            self.caption.set_text(f"{self.idx + 1} из {len(self.items)} · страница {p + 1} из {n}")
+            self.caption.set_text(_("{0} из {1} · страница {2} из {3}").format(self.idx + 1, len(self.items), p + 1, n))
             if p in self.pages:
                 self.pic.set_paintable(self.pages[p])
                 self.stack.set_visible_child_name("pic")
@@ -2476,7 +2533,7 @@ def run_gui(start_hidden=False):
                                capture_output=True, text=True, timeout=180)
             out = Path(tmp) / "in.pdf"
             if not out.exists():
-                raise RuntimeError("LibreOffice не смог конвертировать: " + (r.stderr or r.stdout)[-200:])
+                raise RuntimeError(_("LibreOffice не смог конвертировать: ") + (r.stderr or r.stdout)[-200:])
             return out.read_bytes()
 
     class DriveBrowser(Gtk.Box):
@@ -2492,19 +2549,19 @@ def run_gui(start_hidden=False):
             self.thumbs, self.tlinks, self.slots, self.fill_gen = Thumbs(), {}, {}, 0
             self.view = setting("browser_view", "list")
 
-            self.banner = Adw.Banner(title="Аккаунт подключён только на чтение: создание папок, "
-                                           "выгрузка и удаление недоступны",
-                                     button_label="Войти с правом записи")
-            self.banner.connect("button-clicked", lambda *_: self.remote and
+            self.banner = Adw.Banner(title=_("Аккаунт подключён только на чтение: создание папок, "
+                                           "выгрузка и удаление недоступны"),
+                                     button_label=_("Войти с правом записи"))
+            self.banner.connect("button-clicked", lambda *_a: self.remote and
                                 self.app.login(self.remote, readonly=False))
             self.append(self.banner)
 
             bar = Gtk.Box(spacing=6, margin_top=6, margin_bottom=6, margin_start=12, margin_end=12)
-            self.btn_up = Gtk.Button(icon_name="go-up-symbolic", tooltip_text="На уровень выше (Alt+↑)")
+            self.btn_up = Gtk.Button(icon_name="go-up-symbolic", tooltip_text=_("На уровень выше (Alt+↑)"))
             self.btn_up.add_css_class("flat")
-            self.btn_up.connect("clicked", lambda *_: self.go_up())
-            self.root = Gtk.DropDown.new_from_strings(["Мой диск", "Доступные мне"])
-            self.root.set_tooltip_text("Корень")
+            self.btn_up.connect("clicked", lambda *_a: self.go_up())
+            self.root = Gtk.DropDown.new_from_strings([_("Мой диск"), _("Доступные мне")])
+            self.root.set_tooltip_text(_("Корень"))
             self.root.connect("notify::selected", self._root_changed)
             self.crumbs = Gtk.Box(spacing=2, valign=Gtk.Align.CENTER)
             self.crumbs.add_css_class("crumbs")
@@ -2513,19 +2570,19 @@ def run_gui(start_hidden=False):
                                                child=self.crumbs)
             self.spinner = Adw.Spinner(visible=False, width_request=16, height_request=16)
             self.search_btn = Gtk.ToggleButton(icon_name="system-search-symbolic",
-                                               tooltip_text="Поиск в папке (Ctrl+F)")
+                                               tooltip_text=_("Поиск в папке (Ctrl+F)"))
             self.search_btn.add_css_class("flat")
             self.view_btn = Gtk.Button(icon_name="view-grid-symbolic" if self.view == "list"
-                                       else "view-list-symbolic", tooltip_text="Сетка / список (Ctrl+G)")
+                                       else "view-list-symbolic", tooltip_text=_("Сетка / список (Ctrl+G)"))
             self.view_btn.add_css_class("flat")
-            self.view_btn.connect("clicked", lambda *_: self.toggle_view())
+            self.view_btn.connect("clicked", lambda *_a: self.toggle_view())
             mkdir = Gtk.Button(icon_name="folder-new-symbolic", action_name="br.new-folder",
-                               tooltip_text="Новая папка (Ctrl+Shift+N)")
+                               tooltip_text=_("Новая папка (Ctrl+Shift+N)"))
             mkdir.add_css_class("flat")
-            upload = Gtk.Button(action_name="br.upload", tooltip_text="Выгрузить файлы в эту папку")
-            upload.set_child(Adw.ButtonContent(icon_name=ICON_UP, label="Выгрузить сюда"))
+            upload = Gtk.Button(action_name="br.upload", tooltip_text=_("Выгрузить файлы в эту папку"))
+            upload.set_child(Adw.ButtonContent(icon_name=ICON_UP, label=_("Выгрузить сюда")))
             upload.add_css_class("suggested-action")
-            more = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Ещё",
+            more = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text=_("Ещё"),
                                   menu_model=self._folder_menu())
             more.add_css_class("flat")
             for w in (self.btn_up, self.root, self.crumb_sc, self.spinner, self.search_btn, self.view_btn,
@@ -2533,10 +2590,10 @@ def run_gui(start_hidden=False):
                 bar.append(w)
             self.append(bar)
 
-            self.search = Gtk.SearchEntry(placeholder_text="Имя файла или папки", hexpand=True)
-            self.search.connect("search-changed", lambda *_: (self.lb.invalidate_filter(),
+            self.search = Gtk.SearchEntry(placeholder_text=_("Имя файла или папки"), hexpand=True)
+            self.search.connect("search-changed", lambda *_a: (self.lb.invalidate_filter(),
                                                               self.grid.invalidate_filter(), self._footer()))
-            self.search.connect("stop-search", lambda *_: self.search_btn.set_active(False))
+            self.search.connect("stop-search", lambda *_a: self.search_btn.set_active(False))
             sclamp = Adw.Clamp(maximum_size=500, child=self.search)
             self.sbar = Gtk.SearchBar(child=sclamp, show_close_button=False)
             self.sbar.connect_entry(self.search)
@@ -2554,9 +2611,9 @@ def run_gui(start_hidden=False):
             self.load_hint = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, visible=False)
             hint = self.hint_lbl = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, max_width_chars=48)
             hint.add_css_class("dim-label")
-            self.key_btn = Gtk.Button(label="Настроить свой ключ — без ожидания", halign=Gtk.Align.CENTER)
+            self.key_btn = Gtk.Button(label=_("Настроить свой ключ — без ожидания"), halign=Gtk.Align.CENTER)
             self.key_btn.add_css_class("pill")
-            self.key_btn.connect("clicked", lambda *_: KeyDialog(self.app).present(self.win))
+            self.key_btn.connect("clicked", lambda *_a: KeyDialog(self.app).present(self.win))
             self.load_hint.append(hint)
             self.load_hint.append(self.key_btn)
             lbox.append(self.load_hint)
@@ -2588,7 +2645,7 @@ def run_gui(start_hidden=False):
             self.msg = Adw.StatusPage()
             self.msg_btn = Gtk.Button(halign=Gtk.Align.CENTER)
             self.msg_btn.add_css_class("pill")
-            self.msg_btn.connect("clicked", lambda *_: self._msg_cb and self._msg_cb())
+            self.msg_btn.connect("clicked", lambda *_a: self._msg_cb and self._msg_cb())
             self.msg.set_child(self.msg_btn)
             self._msg_cb = None
             self.stack.add_named(self.msg, "msg")
@@ -2614,7 +2671,7 @@ def run_gui(start_hidden=False):
                 sc.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string(accel),
                                                  Gtk.CallbackAction.new(self._shortcut, cb)))
             self.add_controller(sc)
-            self.connect("map", lambda *_: self.pending and self.load())
+            self.connect("map", lambda *_a: self.pending and self.load())
 
         # ---------------------------------------------------------- helpers
         def _shortcut(self, _w, _args, cb):
@@ -2668,7 +2725,7 @@ def run_gui(start_hidden=False):
 
         def _copy(self, text):
             self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(text))
-            self._toast("Ссылка скопирована")
+            self._toast(_("Ссылка скопирована"))
 
         def _open(self, url):
             subprocess.Popen(["xdg-open", url])
@@ -2700,7 +2757,7 @@ def run_gui(start_hidden=False):
             self.actions.lookup_action("upload").set_enabled(self.can_upload())
             self.actions.lookup_action("size-here").set_enabled(bool(self.path) or not self.shared)
 
-        def _root_changed(self, *_):
+        def _root_changed(self, *_a):
             shared = self.root.get_selected() == 1
             if shared != self.shared:
                 self.shared = shared
@@ -2728,8 +2785,8 @@ def run_gui(start_hidden=False):
             self._crumbs()
             self._update_perm()
             if not self.remote:
-                self._show_msg("avatar-default-symbolic", "Нет аккаунта Google",
-                               "Войдите, чтобы видеть свои файлы на Диске", "Войти",
+                self._show_msg("avatar-default-symbolic", _("Нет аккаунта Google"),
+                               _("Войдите, чтобы видеть свои файлы на Диске"), _("Войти"),
                                lambda: self.app.login(None))
                 return
             key = (self.remote, self.shared, self.path)
@@ -2755,16 +2812,16 @@ def run_gui(start_hidden=False):
                     items = None
                 if items is None:
                     if auth_expired(err):
-                        self._show_msg("dialog-password-symbolic", "Вход в Google истёк",
-                                       "Google сбрасывает вход раз в 7 дней, пока приложение в режиме "
-                                       "теста. Войдите заново — это полминуты.", "Войти заново",
+                        self._show_msg("dialog-password-symbolic", _("Вход в Google истёк"),
+                                       _("Google сбрасывает вход раз в 7 дней, пока приложение в режиме "
+                                       "теста. Войдите заново — это полминуты."), _("Войти заново"),
                                        lambda: self.app.relogin(self.remote))
                     elif path:
-                        self._show_msg("folder-visit-symbolic", "Не удалось открыть папку",
-                                       rclone_error(err), "В корень", lambda: self.load(""))
+                        self._show_msg("folder-visit-symbolic", _("Не удалось открыть папку"),
+                                       rclone_error(err), _("В корень"), lambda: self.load(""))
                     else:
-                        self._show_msg("network-error-symbolic", "Не удалось получить список файлов",
-                                       rclone_error(err), "Повторить", lambda: self.load(force=True))
+                        self._show_msg("network-error-symbolic", _("Не удалось получить список файлов"),
+                                       rclone_error(err), _("Повторить"), lambda: self.load(force=True))
                     return
                 self.cache[(self.remote, self.shared, path)] = items
                 self._fill(items)
@@ -2785,8 +2842,8 @@ def run_gui(start_hidden=False):
         def _crumbs(self):
             while (c := self.crumbs.get_first_child()) is not None:
                 self.crumbs.remove(c)
-            home = Gtk.Button(icon_name="go-home-symbolic", tooltip_text="Корень")
-            home.connect("clicked", lambda *_: self.load(""))
+            home = Gtk.Button(icon_name="go-home-symbolic", tooltip_text=_("Корень"))
+            home.connect("clicked", lambda *_a: self.load(""))
             home.add_css_class("flat")
             self.crumbs.append(home)
             acc = ""
@@ -2835,11 +2892,11 @@ def run_gui(start_hidden=False):
             self.slots, self.tlinks = {}, {}
             if not items:
                 if self.can_upload():
-                    self._show_msg("folder-symbolic", "Папка пуста",
-                                   "Перетащите сюда файлы или нажмите «Выгрузить сюда»",
-                                   "Выгрузить сюда", lambda: self.actions.activate_action("upload", None))
+                    self._show_msg("folder-symbolic", _("Папка пуста"),
+                                   _("Перетащите сюда файлы или нажмите «Выгрузить сюда»"),
+                                   _("Выгрузить сюда"), lambda: self.actions.activate_action("upload", None))
                 else:
-                    self._show_msg("folder-symbolic", "Папка пуста", None, None, None)
+                    self._show_msg("folder-symbolic", _("Папка пуста"), None, None, None)
                 return
             grid = self.view == "grid"
             for it in sorted(items, key=self._sort_key()):
@@ -2856,11 +2913,11 @@ def run_gui(start_hidden=False):
             """Explain a slow listing; the cause depends on whose OAuth key the account uses."""
             own = bool(remote_config(self.remote).get("client_id"))
             self.hint_lbl.set_label(
-                "Google Диск долго отвечает — rclone ждёт и повторяет. "
-                "У аккаунта свой ключ, так что это не общий лимит; большие папки бывают до минуты…"
+                _("Google Диск долго отвечает — rclone ждёт и повторяет. "
+                "У аккаунта свой ключ, так что это не общий лимит; большие папки бывают до минуты…")
                 if own else
-                "Google Диск ограничивает частоту запросов (общий ключ rclone), "
-                "rclone ждёт и повторяет. Обычно это до минуты…")
+                _("Google Диск ограничивает частоту запросов (общий ключ rclone), "
+                "rclone ждёт и повторяет. Обычно это до минуты…"))
             self.key_btn.set_visible(not own)
             self.load_hint.set_visible(True)
 
@@ -2931,9 +2988,9 @@ def run_gui(start_hidden=False):
         def _row(self, it):
             size = it.get("Size", -1)
             if it["IsDir"]:
-                info = "Папка"
+                info = _("Папка")
             elif size is None or size < 0:
-                info = "Документ Google"
+                info = _("Документ Google")
             else:
                 info = human(size)
             date = fmt_date(it.get("ModTime", ""))
@@ -2949,7 +3006,7 @@ def run_gui(start_hidden=False):
                 self.slots[it["ID"]] = icon
             row.add_prefix(icon)
             mb = Gtk.MenuButton(icon_name="view-more-symbolic", valign=Gtk.Align.CENTER,
-                                tooltip_text="Действия")
+                                tooltip_text=_("Действия"))
             mb.add_css_class("flat")
             mb.set_create_popup_func(lambda b, i=it: b.set_menu_model(self._item_menu(i)))
             row.add_suffix(mb)
@@ -2969,18 +3026,18 @@ def run_gui(start_hidden=False):
             size = sum(max(i.get("Size") or 0, 0) for i in items if not i["IsDir"])
             parts = []
             if q:
-                parts.append(f"Найдено: {len(items)}")
+                parts.append(_("Найдено: {0}").format(len(items)))
             if dirs:
-                parts.append(f"{dirs} {plural(dirs, 'папка', 'папки', 'папок')}")
+                parts.append(f"{dirs} {plural(dirs, _('папка'), _('папки'), _('папок'))}")
             if files:
-                parts.append(f"{files} {plural(files, 'файл', 'файла', 'файлов')} · {human(size)}")
+                parts.append(f"{files} {plural(files, _('файл'), _('файла'), _('файлов'))} · {human(size)}")
             self.count_lbl.set_text(", ".join(parts))
             a = self.app.account(self.remote) if self.remote else {}
             used, total = a.get("used"), a.get("total")
             if used is not None and total:
-                self.quota_lbl.set_text(f"Занято {human(used)} из {human(total)} ({used / total * 100:.0f}%)")
+                self.quota_lbl.set_text(_("Занято {0} из {1} ({2:.0f}%)").format(human(used), human(total), used / total * 100))
             elif used is not None:
-                self.quota_lbl.set_text(f"Занято {human(used)}")
+                self.quota_lbl.set_text(_("Занято {0}").format(human(used)))
             else:
                 self.quota_lbl.set_text("")
 
@@ -3029,18 +3086,18 @@ def run_gui(start_hidden=False):
             fid, m = it["ID"], Gio.Menu()
             s1, s2, s3 = Gio.Menu(), Gio.Menu(), Gio.Menu()
             if it["IsDir"]:
-                self._mi(s1, "Открыть", "br.enter", fid)
+                self._mi(s1, _("Открыть"), "br.enter", fid)
             else:
-                self._mi(s1, "Просмотр", "br.preview", fid)
-            self._mi(s1, "Открыть в браузере", "br.web", fid)
-            self._mi(s1, "Копировать ссылку", "br.link", fid)
-            self._mi(s2, "Скачать в «Загрузки»", "br.download", fid)
-            self._mi(s2, "Скачать в…", "br.download-to", fid)
+                self._mi(s1, _("Просмотр"), "br.preview", fid)
+            self._mi(s1, _("Открыть в браузере"), "br.web", fid)
+            self._mi(s1, _("Копировать ссылку"), "br.link", fid)
+            self._mi(s2, _("Скачать в «Загрузки»"), "br.download", fid)
+            self._mi(s2, _("Скачать в…"), "br.download-to", fid)
             if it["IsDir"]:
-                self._mi(s2, "Размер папки", "br.size", fid)
-            self._mi(s3, "Переименовать…", "br.rename", fid)
-            self._mi(s3, "Переместить в…", "br.move", fid)
-            self._mi(s3, "Удалить", "br.delete", fid)
+                self._mi(s2, _("Размер папки"), "br.size", fid)
+            self._mi(s3, _("Переименовать…"), "br.rename", fid)
+            self._mi(s3, _("Переместить в…"), "br.move", fid)
+            self._mi(s3, _("Удалить"), "br.delete", fid)
             for s in (s1, s2, s3):
                 m.append_section(None, s)
             return m
@@ -3048,18 +3105,18 @@ def run_gui(start_hidden=False):
         def _folder_menu(self):
             m = Gio.Menu()
             s0 = Gio.Menu()
-            for label, mode in (("По имени", "name"), ("Сначала новые", "date"), ("Сначала большие", "size")):
+            for label, mode in ((_("По имени"), "name"), (_("Сначала новые"), "date"), (_("Сначала большие"), "size")):
                 self._mi(s0, label, "br.sort", mode)
-            m.append_section("Сортировка", s0)
+            m.append_section(_("Сортировка"), s0)
             s1 = Gio.Menu()
-            self._mi(s1, "Обновить", "br.refresh")
-            self._mi(s1, "Новая папка…", "br.new-folder")
-            self._mi(s1, "Размер этой папки", "br.size-here")
+            self._mi(s1, _("Обновить"), "br.refresh")
+            self._mi(s1, _("Новая папка…"), "br.new-folder")
+            self._mi(s1, _("Размер этой папки"), "br.size-here")
             m.append_section(None, s1)
             s2 = Gio.Menu()
-            self._mi(s2, "Открыть папку в браузере", "br.web-here")
-            self._mi(s2, "Копировать ссылку на папку", "br.link-here")
-            self._mi(s2, "Корзина Google Диска", "br.trash")
+            self._mi(s2, _("Открыть папку в браузере"), "br.web-here")
+            self._mi(s2, _("Копировать ссылку на папку"), "br.link-here")
+            self._mi(s2, _("Корзина Google Диска"), "br.trash")
             m.append_section(None, s2)
             return m
 
@@ -3091,7 +3148,7 @@ def run_gui(start_hidden=False):
         def _with_item(self, fid, f):
             it, path = self._item(fid)
             if it is None:
-                self._toast("Элемент уже не найден — обновите папку")
+                self._toast(_("Элемент уже не найден — обновите папку"))
                 return
             f(it, path)
 
@@ -3125,13 +3182,13 @@ def run_gui(start_hidden=False):
             d = Adw.AlertDialog(heading=heading, body=body or "")
             e = Gtk.Entry(text=initial, activates_default=True)
             d.set_extra_child(e)
-            d.add_response("cancel", "Отмена")
+            d.add_response("cancel", _("Отмена"))
             d.add_response("ok", ok_label)
             d.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
             d.set_default_response("ok")
             d.set_close_response("cancel")
 
-            def changed(*_):
+            def changed(*_a):
                 n = e.get_text().strip()
                 d.set_response_enabled("ok", bool(n) and "/" not in n and n not in (".", "..") and n != initial)
 
@@ -3154,46 +3211,46 @@ def run_gui(start_hidden=False):
         def _new_folder(self):
             def create(name):
                 if self._exists(name):
-                    self._toast(f"«{name}» здесь уже есть")
+                    self._toast(_("«{0}» здесь уже есть").format(name))
                     return
                 self._run(["mkdir", self.rpath(posixpath.join(self.path, name))],
-                          self._after_write(f"Папка «{name}» создана", "Не удалось создать папку"))
+                          self._after_write(_("Папка «{0}» создана").format(name), _("Не удалось создать папку")))
 
-            self._ask_name("Новая папка", "", "Создать", create)
+            self._ask_name(_("Новая папка"), "", _("Создать"), create)
 
         def _rename(self, it, path):
             def rename(name):
                 if self._exists(name):
-                    self._toast(f"«{name}» здесь уже есть")
+                    self._toast(_("«{0}» здесь уже есть").format(name))
                     return
                 new = posixpath.join(posixpath.dirname(path), name)
                 self._run(["moveto", self.rpath(path), self.rpath(new)],
-                          self._after_write("Переименовано", "Не удалось переименовать"))
+                          self._after_write(_("Переименовано"), _("Не удалось переименовать")))
 
-            self._ask_name("Переименовать", it["Name"], "Переименовать", rename)
+            self._ask_name(_("Переименовать"), it["Name"], _("Переименовать"), rename)
 
         def _move(self, it, path):
             def picked(dest):
                 dest = dest.strip("/")
                 if dest == posixpath.dirname(path):
-                    self._toast("Уже лежит в этой папке")
+                    self._toast(_("Уже лежит в этой папке"))
                     return
                 if it["IsDir"] and (dest == path or dest.startswith(path + "/")):
-                    self._toast("Нельзя переместить папку в саму себя")
+                    self._toast(_("Нельзя переместить папку в саму себя"))
                     return
                 self._run(["moveto", self.rpath(path), self.rpath(posixpath.join(dest, it["Name"]))],
-                          self._after_write(f"«{it['Name']}» перемещено в /{dest}", "Не удалось переместить"))
+                          self._after_write(_("«{0}» перемещено в /{1}").format(it['Name'], dest), _("Не удалось переместить")))
 
             RemoteBrowser(self.win, self.remote, self.path, picked).present(self.win)
 
         def _delete(self, it, path):
-            what = "папку" if it["IsDir"] else "файл"
-            d = Adw.AlertDialog(heading=f"Удалить {what} «{it['Name']}»?",
-                                body=("Папка со всем содержимым" if it["IsDir"] else "Файл") +
-                                     " попадёт в корзину Google Диска, оттуда его можно восстановить "
-                                     "в течение 30 дней.")
-            d.add_response("cancel", "Отмена")
-            d.add_response("delete", "Удалить")
+            what = _("папку") if it["IsDir"] else _("файл")
+            d = Adw.AlertDialog(heading=_("Удалить {0} «{1}»?").format(what, it['Name']),
+                                body=(_("Папка со всем содержимым") if it["IsDir"] else _("Файл")) +
+                                     _(" попадёт в корзину Google Диска, оттуда его можно восстановить "
+                                     "в течение 30 дней."))
+            d.add_response("cancel", _("Отмена"))
+            d.add_response("delete", _("Удалить"))
             d.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
             d.set_default_response("cancel")
             d.set_close_response("cancel")
@@ -3203,15 +3260,15 @@ def run_gui(start_hidden=False):
                     return
                 verb = "purge" if it["IsDir"] else "deletefile"
                 self._run([verb, self.rpath(path)],
-                          self._after_write(f"«{it['Name']}» перемещено в корзину", "Не удалось удалить"))
+                          self._after_write(_("«{0}» перемещено в корзину").format(it['Name']), _("Не удалось удалить")))
 
             d.connect("response", go)
             d.present(self.win)
 
         def _size(self, it, path):
             name = it["Name"] if it else (posixpath.basename(path) or
-                                          ("Доступные мне" if self.shared else "Мой диск"))
-            self._toast(f"Считаю размер «{name}»…")
+                                          (_("Доступные мне") if self.shared else _("Мой диск")))
+            self._toast(_("Считаю размер «{0}»…").format(name))
 
             def done(code, out, err):
                 try:
@@ -3219,11 +3276,10 @@ def run_gui(start_hidden=False):
                 except ValueError:
                     s = None
                 if not s:
-                    self._toast(f"Не удалось посчитать: {rclone_error(err)}")
+                    self._toast(_("Не удалось посчитать: {0}").format(rclone_error(err)))
                     return
                 n = s.get("count", 0)
-                self._toast(f"«{name}»: {human(s.get('bytes', 0))} в {n} "
-                            f"{plural(n, 'файле', 'файлах', 'файлах')}")
+                self._toast(_("«{0}»: {1} в {2} {3}").format(name, human(s.get('bytes', 0)), n, plural(n, _('файле'), _('файлах'), _('файлах'))))
 
             self._run(["size", "--json", self.rpath(path)], done, timeout=1800)
 
@@ -3240,7 +3296,7 @@ def run_gui(start_hidden=False):
             self.win.add_job(job)
 
         def _download_to(self, it, _path):
-            fd = Gtk.FileDialog(title=f"Куда скачать «{it['Name']}»",
+            fd = Gtk.FileDialog(title=_("Куда скачать «{0}»").format(it['Name']),
                                 initial_folder=Gio.File.new_for_path(str(HOME / "Downloads")))
 
             def picked(fd, res):
@@ -3256,7 +3312,7 @@ def run_gui(start_hidden=False):
         def _upload_here(self, paths=None):
             dest = self.upload_dest()
             if dest is None:
-                self._toast("Не удалось определить папку — обновите её")
+                self._toast(_("Не удалось определить папку — обновите её"))
                 return
             self.win.show_upload(paths, dest=dest)
 
@@ -3283,15 +3339,15 @@ def run_gui(start_hidden=False):
             self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
             empty = Adw.StatusPage(
                 icon_name=ICON_UP if up else ICON_DOWN,
-                title="Нет выгрузок" if up else "Нет загрузок",
-                description=("Выберите файлы или папки — или перетащите их в окно.\n"
-                             "Выгрузка идёт в фоне и продолжится после перезагрузки.") if up else
-                            ("Вставьте ссылку на папку Google Drive. Загрузка идёт в фоне,\n"
-                             "не зависит от окна и продолжится после перезагрузки."))
-            b = Gtk.Button(label="Выгрузить файлы" if up else "Новая загрузка", halign=Gtk.Align.CENTER)
+                title=_("Нет выгрузок") if up else _("Нет загрузок"),
+                description=(_("Выберите файлы или папки — или перетащите их в окно.\n"
+                             "Выгрузка идёт в фоне и продолжится после перезагрузки.")) if up else
+                            (_("Вставьте ссылку на папку Google Drive. Загрузка идёт в фоне,\n"
+                             "не зависит от окна и продолжится после перезагрузки.")))
+            b = Gtk.Button(label=_("Выгрузить файлы") if up else _("Новая загрузка"), halign=Gtk.Align.CENTER)
             b.add_css_class("pill")
             b.add_css_class("suggested-action")
-            b.connect("clicked", lambda *_: win.show_upload() if up else win.show_add())
+            b.connect("clicked", lambda *_a: win.show_upload() if up else win.show_add())
             empty.set_child(b)
             self.stack.add_named(empty, "empty")
             sc = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True, child=clamp)
@@ -3307,11 +3363,11 @@ def run_gui(start_hidden=False):
             tv = Adw.ToolbarView()
             hb = Adw.HeaderBar()
             add = Gtk.Button(icon_name="list-add-symbolic",
-                             tooltip_text="Новая загрузка или выгрузка (Ctrl+N)")
-            add.connect("clicked", lambda *_: self.show_new())
+                             tooltip_text=_("Новая загрузка или выгрузка (Ctrl+N)"))
+            add.connect("clicked", lambda *_a: self.show_new())
             hb.pack_start(add)
 
-            self.acct_btn = Gtk.MenuButton(tooltip_text="Аккаунт Google")
+            self.acct_btn = Gtk.MenuButton(tooltip_text=_("Аккаунт Google"))
             ab = Gtk.Box(spacing=6)
             ab.append(Gtk.Image.new_from_icon_name("avatar-default-symbolic"))
             self.acct_lbl = Gtk.Label(ellipsize=Pango.EllipsizeMode.END, max_width_chars=22)
@@ -3333,7 +3389,7 @@ def run_gui(start_hidden=False):
             head.add_css_class("drawer-head")
             hbx = Gtk.Box(spacing=10)
             hbx.append(Gtk.Image.new_from_icon_name(ICON_UP))
-            self.drawer_title = Gtk.Label(label="Выгрузки")
+            self.drawer_title = Gtk.Label(label=_("Выгрузки"))
             self.drawer_title.add_css_class("heading")
             hbx.append(self.drawer_title)
             self.drawer_info = Gtk.Label(hexpand=True, xalign=0, ellipsize=Pango.EllipsizeMode.END)
@@ -3343,7 +3399,7 @@ def run_gui(start_hidden=False):
             self.drawer_arrow = Gtk.Image()
             hbx.append(self.drawer_arrow)
             head.set_child(hbx)
-            head.connect("clicked", lambda *_: self.open_drawer(not self.drawer_rev.get_reveal_child()))
+            head.connect("clicked", lambda *_a: self.open_drawer(not self.drawer_rev.get_reveal_child()))
             self.drawer.append(head)
             self.drawer_rev = Gtk.Revealer(transition_type=Gtk.RevealerTransitionType.SLIDE_UP,
                                            child=self.pages["up"].sc)
@@ -3351,8 +3407,8 @@ def run_gui(start_hidden=False):
             upbox.append(self.drawer)
             self.open_drawer(setting("up_drawer", True), save=False)
             self.vpages = {
-                "down": self.views.add_titled_with_icon(self.pages["down"].stack, "down", "Скачивание", ICON_DOWN),
-                "up": self.views.add_titled_with_icon(upbox, "up", "Мой Диск", "folder-remote-symbolic"),
+                "down": self.views.add_titled_with_icon(self.pages["down"].stack, "down", _("Скачивание"), ICON_DOWN),
+                "up": self.views.add_titled_with_icon(upbox, "up", _("Мой Диск"), "folder-remote-symbolic"),
             }
             self.views.set_visible_child_name(setting("tab", "down"))
             self.views.connect("notify::visible-child-name",
@@ -3361,11 +3417,11 @@ def run_gui(start_hidden=False):
             hb.set_title_widget(sw)
 
             menu = Gio.Menu()
-            menu.append("Настройки", "app.settings")
-            menu.append("О программе", "app.about")
-            menu.append("Выход", "app.quit")
+            menu.append(_("Настройки"), "app.settings")
+            menu.append(_("О программе"), "app.about")
+            menu.append(_("Выход"), "app.quit")
             hb.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu,
-                                       primary=True, tooltip_text="Меню"))
+                                       primary=True, tooltip_text=_("Меню")))
             self.activity = Gtk.Label()
             self.activity.add_css_class("activity")
             self.activity.add_css_class("dim-label")
@@ -3378,7 +3434,7 @@ def run_gui(start_hidden=False):
 
             drop = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
             drop.connect("enter", self._drop_enter)
-            drop.connect("leave", lambda *_: self.toasts.remove_css_class("drop-hint"))
+            drop.connect("leave", lambda *_a: self.toasts.remove_css_class("drop-hint"))
             drop.connect("drop", self._on_drop)
             self.add_controller(drop)
             self.connect("close-request", self._on_close)
@@ -3392,20 +3448,20 @@ def run_gui(start_hidden=False):
             self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=4))
             return False
 
-        def _on_close(self, *_):
+        def _on_close(self, *_a):
             tray = self.app.tray
             if tray and tray.registered and setting("close_to_tray", True):
                 self.set_visible(False)
                 tray.update()
                 if not setting("tray_hint_shown"):
                     set_setting("tray_hint_shown", True)
-                    n = Gio.Notification.new("Drive Loader свёрнут в трей")
-                    n.set_body("Передачи продолжаются. Выход — через меню значка в трее.")
+                    n = Gio.Notification.new(_("Drive Loader свёрнут в трей"))
+                    n.set_body(_("Передачи продолжаются. Выход — через меню значка в трее."))
                     self.app.send_notification("tray-hint", n)
                 return True
             return False
 
-        def _drop_enter(self, *_):
+        def _drop_enter(self, *_a):
             self.toasts.add_css_class("drop-hint")
             return Gdk.DragAction.COPY
 
@@ -3438,17 +3494,17 @@ def run_gui(start_hidden=False):
 
         def update_accounts(self):
             app = self.app
-            self.acct_lbl.set_text(app.account_label(app.active) if app.active else "Войти в Google")
+            self.acct_lbl.set_text(app.account_label(app.active) if app.active else _("Войти в Google"))
             m = Gio.Menu()
             sec = Gio.Menu()
             for a in app.accounts:
                 it = Gio.MenuItem.new(app.account_label(a["name"]), None)
                 it.set_action_and_target_value("app.account", GLib.Variant("s", a["name"]))
                 sec.append_item(it)
-            m.append_section("Аккаунт для новых передач" if app.accounts else None, sec)
+            m.append_section(_("Аккаунт для новых передач") if app.accounts else None, sec)
             sec2 = Gio.Menu()
-            sec2.append("Добавить аккаунт…", "app.add-account")
-            sec2.append("Управление аккаунтами…", "app.settings")
+            sec2.append(_("Добавить аккаунт…"), "app.add-account")
+            sec2.append(_("Управление аккаунтами…"), "app.settings")
             m.append_section(None, sec2)
             self.acct_btn.set_menu_model(m)
             self.browser.set_remote(app.active)
@@ -3467,7 +3523,7 @@ def run_gui(start_hidden=False):
                     j["status"] == "error" and is_up(j) == (key == "up") for j in self.store.jobs))
             n_up = self.pages["up"].count
             self.drawer.set_visible(n_up > 0)
-            self.drawer_title.set_text(f"Выгрузки · {n_up}")
+            self.drawer_title.set_text(_("Выгрузки · {0}").format(n_up))
             running = [c for jid, c in self.cards.items()
                        if (j := self.store.get(jid)) and j["status"] == "running"]
             speed = sum((c.last_stats or {}).get("speed", 0) or 0 for c in running)
@@ -3476,11 +3532,11 @@ def run_gui(start_hidden=False):
             bits = []
             if up_run:
                 up_speed = sum((c.last_stats or {}).get("speed", 0) or 0 for c in up_run)
-                bits.append(f"идёт {len(up_run)} · {human(up_speed)}/с")
+                bits.append(_("идёт {0} · {1}/с").format(len(up_run), human(up_speed)))
             if n_err:
-                bits.append(f"ошибок: {n_err}")
+                bits.append(_("ошибок: {0}").format(n_err))
             self.drawer_info.set_text("   ".join(bits))
-            self.activity.set_text(f"{human(speed)}/с" if running else "")
+            self.activity.set_text(_("{0}/с").format(human(speed)) if running else "")
             if self.app.tray:
                 self.app.tray.update()
 
@@ -3494,7 +3550,7 @@ def run_gui(start_hidden=False):
 
         def _need_account(self):
             if not self.app.accounts:
-                self.toast("Сначала войдите в аккаунт Google")
+                self.toast(_("Сначала войдите в аккаунт Google"))
                 self.app.show_settings()
                 return True
             return False
@@ -3521,13 +3577,13 @@ def run_gui(start_hidden=False):
             self._add_card(job)
             self._update_view()
             t = Adw.Toast(title=GLib.markup_escape_text(
-                f"{'Выгрузка' if is_up(job) else 'Загрузка'} «{job['name']}» начата"), timeout=5)
+                _("{0} «{1}» начата").format(_('Выгрузка') if is_up(job) else _('Загрузка'), job['name'])), timeout=5)
             if is_up(job):
                 self.open_drawer(True)
             visible = self.views.get_visible_child_name() == ("up" if is_up(job) else "down")
             if not visible:
-                t.set_button_label("Показать")
-                t.connect("button-clicked", lambda *_, up=is_up(job): self.show_jobs(up))
+                t.set_button_label(_("Показать"))
+                t.connect("button-clicked", lambda *_a, up=is_up(job): self.show_jobs(up))
             self.toasts.add_toast(t)
 
         def toggle_job(self, jid):
@@ -3554,7 +3610,7 @@ def run_gui(start_hidden=False):
             if not job:
                 return
             if not start_job(job):
-                self.toast("Не удалось запустить передачу")
+                self.toast(_("Не удалось запустить передачу"))
             self.store.save()
             self.cards[jid].history.clear()
             self.cards[jid].refresh(job)
@@ -3581,7 +3637,7 @@ def run_gui(start_hidden=False):
             if job["status"] == "running" and port:
                 threading.Thread(target=rc, args=(port, "core/bwlimit", {"rate": val or "off"}),
                                  daemon=True).start()
-            self.toast("Ограничение снято" if not val else f"Ограничение: {val.replace('M', ' МБ/с')}")
+            self.toast(_("Ограничение снято") if not val else _("Ограничение: {0}").format(val.replace('M', _(' МБ/с'))))
 
         def open_folder(self, jid):
             job = self.store.get(jid)
@@ -3607,7 +3663,7 @@ def run_gui(start_hidden=False):
             if not dest:
                 subprocess.Popen(["xdg-open", "https://drive.google.com/drive/my-drive"])
                 return
-            self.toast("Ищу папку на Диске…")
+            self.toast(_("Ищу папку на Диске…"))
 
             def work():
                 cmd = [RCLONE, "lsjson", "--stat", f"{job['remote']}:{dest}"]
@@ -3620,7 +3676,7 @@ def run_gui(start_hidden=False):
                 if fid:
                     subprocess.Popen(["xdg-open", f"https://drive.google.com/drive/folders/{fid}"])
                 else:
-                    GLib.idle_add(self.toast, "Папка на Диске пока не создана")
+                    GLib.idle_add(self.toast, _("Папка на Диске пока не создана"))
 
             threading.Thread(target=work, daemon=True).start()
 
@@ -3629,17 +3685,17 @@ def run_gui(start_hidden=False):
             if job and log_of(job).exists():
                 subprocess.Popen(["xdg-open", str(log_of(job))])
             else:
-                self.toast("Лог пока пуст")
+                self.toast(_("Лог пока пуст"))
 
         def ask_remove(self, jid):
             job = self.store.get(jid)
             if not job:
                 return
-            body = ("Выгрузка остановится. Уже выгруженные файлы останутся на Диске." if is_up(job)
-                    else "Загрузка остановится. Скачанные файлы останутся в папке.")
-            d = Adw.AlertDialog(heading=f"Убрать «{job['name']}»?", body=body)
-            d.add_response("cancel", "Отмена")
-            d.add_response("remove", "Убрать")
+            body = (_("Выгрузка остановится. Уже выгруженные файлы останутся на Диске.") if is_up(job)
+                    else _("Загрузка остановится. Скачанные файлы останутся в папке."))
+            d = Adw.AlertDialog(heading=_("Убрать «{0}»?").format(job['name']), body=body)
+            d.add_response("cancel", _("Отмена"))
+            d.add_response("remove", _("Убрать"))
             d.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
             d.set_default_response("cancel")
             d.connect("response", lambda _d, r: r == "remove" and self._remove(jid))
@@ -3669,24 +3725,24 @@ def run_gui(start_hidden=False):
                 if active:
                     card.refresh(job, stats)
                     continue
-                what = "Выгрузка" if is_up(job) else "Загрузка"
+                what = _("Выгрузка") if is_up(job) else _("Загрузка")
                 if code is None:
                     job["status"] = "interrupted"
                 elif finish_job(job, code):
                     if is_up(job):
                         self.browser.changed()
                         self.app.refresh_account(job.get("remote", REMOTE))
-                    n = Gio.Notification.new(f"{what} завершена")
-                    n.set_body(f"«{job['name']}» выгружено на Google Диск" if is_up(job)
-                               else f"«{job['name']}» скачано в {job['dest']}")
+                    n = Gio.Notification.new(_("{0} завершена").format(what))
+                    n.set_body(_("«{0}» выгружено на Google Диск").format(job['name']) if is_up(job)
+                               else _("«{0}» скачано в {1}").format(job['name'], job['dest']))
                     self.app.send_notification(f"done-{jid}", n)
                 else:
-                    n = Gio.Notification.new(f"{what} остановилась с ошибкой")
-                    n.set_body(f"«{job['name']}»: {job['error'].splitlines()[0]}")
-                    if job["error"].startswith(AUTH_EXPIRED):
-                        n.add_button_with_target("Войти заново", "app.relogin",
+                    n = Gio.Notification.new(_("{0} остановилась с ошибкой").format(what))
+                    n.set_body(_("«{0}»: {1}").format(job['name'], job['error'].splitlines()[0]))
+                    if job["error"].startswith(AUTH_PREFIXES):
+                        n.add_button_with_target(_("Войти заново"), "app.relogin",
                                                  GLib.Variant("s", job.get("remote", REMOTE)))
-                        self.toast(f"«{job['name']}»: {AUTH_EXPIRED}")
+                        self.toast(_("«{0}»: {1}").format(job['name'], AUTH_EXPIRED))
                     self.app.send_notification(f"err-{jid}", n)
                 changed = True
                 card.refresh(job)
@@ -3698,16 +3754,16 @@ def run_gui(start_hidden=False):
     # ------------------------------------------------------------ app
 
     KEY_STEPS = [
-        ("Создайте проект", "Любое имя, например «Drive Loader»",
+        (_("Создайте проект"), _("Любое имя, например «Drive Loader»"),
          "https://console.cloud.google.com/projectcreate"),
-        ("Включите Google Drive API", "Кнопка «Включить» (проверьте, что выбран новый проект)",
+        (_("Включите Google Drive API"), _("Кнопка «Включить» (проверьте, что выбран новый проект)"),
          "https://console.cloud.google.com/apis/library/drive.googleapis.com"),
-        ("Настройте экран входа", "«Начать»: название, ваш e-mail, аудитория «Внешняя»",
+        (_("Настройте экран входа"), _("«Начать»: название, ваш e-mail, аудитория «Внешняя»"),
          "https://console.cloud.google.com/auth/overview"),
-        ("Добавьте себя в тестировщики", "«Тестовые пользователи» → «Add users» → ваш e-mail → «Сохранить». "
-         "Без этого вход даёт «Ошибка 403: access_denied»",
+        (_("Добавьте себя в тестировщики"), _("«Тестовые пользователи» → «Add users» → ваш e-mail → «Сохранить». "
+         "Без этого вход даёт «Ошибка 403: access_denied»"),
          "https://console.cloud.google.com/auth/audience"),
-        ("Создайте клиент OAuth", "Тип «Приложение для ПК» → «Создать» → «Скачать JSON»",
+        (_("Создайте клиент OAuth"), _("Тип «Приложение для ПК» → «Создать» → «Скачать JSON»"),
          "https://console.cloud.google.com/auth/clients/create"),
     ]
 
@@ -3728,7 +3784,7 @@ def run_gui(start_hidden=False):
         sharing its rate-limited (and retiring) client_id with everyone."""
 
         def __init__(self, app):
-            super().__init__(title="Свой ключ Google", content_width=580, content_height=760)
+            super().__init__(title=_("Свой ключ Google"), content_width=580, content_height=760)
             self.app = app
             self.opened = time.time()
             s = load_json(SETTINGS_FILE, {})
@@ -3739,20 +3795,20 @@ def run_gui(start_hidden=False):
             page = Adw.PreferencesPage()
 
             intro = Adw.PreferencesGroup(description=(
-                "Сейчас все запросы идут через общий ключ rclone, который делят тысячи людей: "
+                _("Сейчас все запросы идут через общий ключ rclone, который делят тысячи людей: "
                 "Google притормаживает его (отсюда долгие «Загрузка…»), а в 2026 году его отключат. "
                 "Свой ключ бесплатный и настраивается один раз, минуты за три. "
-                "Создать его за вас Google программам не даёт, поэтому нужны четыре шага в браузере."))
+                "Создать его за вас Google программам не даёт, поэтому нужны четыре шага в браузере.")))
             page.add(intro)
 
-            steps = Adw.PreferencesGroup(title="Шаги в Google Cloud")
+            steps = Adw.PreferencesGroup(title=_("Шаги в Google Cloud"))
             for i, (title, sub, url) in enumerate(KEY_STEPS, 1):
                 r = Adw.ActionRow(title=title, subtitle=sub, activatable=True)
                 n = Gtk.Label(label=str(i), width_chars=2)
                 n.add_css_class("title-3")
                 r.add_prefix(n)
                 b = Gtk.Button(icon_name="adw-external-link-symbolic", valign=Gtk.Align.CENTER,
-                               tooltip_text="Открыть в браузере")
+                               tooltip_text=_("Открыть в браузере"))
                 b.add_css_class("flat")
                 b.connect("clicked", lambda _b, u=url: subprocess.Popen(["xdg-open", u]))
                 r.add_suffix(b)
@@ -3760,20 +3816,20 @@ def run_gui(start_hidden=False):
                 steps.add(r)
             page.add(steps)
 
-            key = Adw.PreferencesGroup(title="Ключ")
+            key = Adw.PreferencesGroup(title=_("Ключ"))
             self.key_row = Adw.ActionRow()
             self.key_spin = Adw.Spinner(valign=Gtk.Align.CENTER)
             self.key_icon = Gtk.Image(icon_name="emblem-ok-symbolic", valign=Gtk.Align.CENTER)
             self.key_icon.add_css_class("success")
             self.key_row.add_prefix(self.key_spin)
             self.key_row.add_prefix(self.key_icon)
-            pick = Gtk.Button(label="Файл…", valign=Gtk.Align.CENTER,
-                              tooltip_text="Выбрать скачанный client_secret_….json")
+            pick = Gtk.Button(label=_("Файл…"), valign=Gtk.Align.CENTER,
+                              tooltip_text=_("Выбрать скачанный client_secret_….json"))
             pick.add_css_class("flat")
             pick.connect("clicked", self._pick)
             self.key_row.add_suffix(pick)
             key.add(self.key_row)
-            man = Adw.ExpanderRow(title="Ввести вручную")
+            man = Adw.ExpanderRow(title=_("Ввести вручную"))
             self.e_cid = Adw.EntryRow(title="client_id", text=self.cid)
             self.e_sec = Adw.PasswordEntryRow(title="client_secret", text=self.sec)
             for e in (self.e_cid, self.e_sec):
@@ -3782,14 +3838,14 @@ def run_gui(start_hidden=False):
             key.add(man)
             page.add(key)
 
-            self.acc = Adw.PreferencesGroup(title="Аккаунты", description=(
-                "Ключ привязывается ко входу, поэтому каждый аккаунт войдёт заново: "
+            self.acc = Adw.PreferencesGroup(title=_("Аккаунты"), description=(
+                _("Ключ привязывается ко входу, поэтому каждый аккаунт войдёт заново: "
                 "откроется браузер, на предупреждении «Приложение не проверено» нажмите "
-                "«Дополнительно» → «Перейти»."))
+                "«Дополнительно» → «Перейти».")))
             self.acc_rows = []
             page.add(self.acc)
 
-            self.apply_btn = Gtk.Button(label="Применить и войти заново", halign=Gtk.Align.CENTER,
+            self.apply_btn = Gtk.Button(label=_("Применить и войти заново"), halign=Gtk.Align.CENTER,
                                         margin_top=6)
             self.apply_btn.add_css_class("suggested-action")
             self.apply_btn.add_css_class("pill")
@@ -3804,7 +3860,7 @@ def run_gui(start_hidden=False):
             threading.Thread(target=self._load_confs, daemon=True).start()
             self._show_key()
             self.watch = GLib.timeout_add_seconds(2, self._scan)
-            self.connect("closed", lambda *_: GLib.source_remove(self.watch))
+            self.connect("closed", lambda *_a: GLib.source_remove(self.watch))
 
         # key ----------------------------------------------------------
         def _set_key(self, cid, sec, save=True):
@@ -3821,11 +3877,11 @@ def run_gui(start_hidden=False):
             self.key_icon.set_visible(have)
             if have:
                 short = self.cid.split("-")[0] + "-…" + ".apps.googleusercontent.com"
-                self.key_row.set_title("Ключ есть")
+                self.key_row.set_title(_("Ключ есть"))
                 self.key_row.set_subtitle(short)
             else:
-                self.key_row.set_title("Жду файл ключа в «Загрузках»…")
-                self.key_row.set_subtitle("client_secret_….json подхватится сам после шага 4")
+                self.key_row.set_title(_("Жду файл ключа в «Загрузках»…"))
+                self.key_row.set_subtitle(_("client_secret_….json подхватится сам после шага 4"))
             self.apply_btn.set_sensitive(have and not self.queue)
 
         def _scan(self):
@@ -3837,10 +3893,10 @@ def run_gui(start_hidden=False):
                 c = read_client_json(p)
                 if c and c[2] == "installed":
                     self._fill(c)
-                    self.app.win.toast("Ключ найден в «Загрузках»")
+                    self.app.win.toast(_("Ключ найден в «Загрузках»"))
                     break
                 if c:
-                    self.key_row.set_subtitle("Найден ключ типа «Веб-приложение» — нужен «Приложение для ПК»")
+                    self.key_row.set_subtitle(_("Найден ключ типа «Веб-приложение» — нужен «Приложение для ПК»"))
             return True
 
         def _fill(self, c):
@@ -3850,12 +3906,12 @@ def run_gui(start_hidden=False):
                 e.handler_unblock_by_func(self._manual)
             self._set_key(c[0], c[1])
 
-        def _pick(self, *_):
-            f = Gtk.FileFilter(name="Ключ Google (JSON)")
+        def _pick(self, *_a):
+            f = Gtk.FileFilter(name=_("Ключ Google (JSON)"))
             f.add_pattern("*.json")
             fl = Gio.ListStore.new(Gtk.FileFilter)
             fl.append(f)
-            Gtk.FileDialog(title="Файл client_secret_….json", filters=fl).open(
+            Gtk.FileDialog(title=_("Файл client_secret_….json"), filters=fl).open(
                 self.app.win, None, self._picked)
 
         def _picked(self, fd, res):
@@ -3865,13 +3921,13 @@ def run_gui(start_hidden=False):
                 return
             c = read_client_json(path)
             if not c:
-                self.app.win.toast("Это не файл ключа Google")
+                self.app.win.toast(_("Это не файл ключа Google"))
             elif c[2] != "installed":
-                self.app.win.toast("Нужен клиент типа «Приложение для ПК»")
+                self.app.win.toast(_("Нужен клиент типа «Приложение для ПК»"))
             else:
                 self._fill(c)
 
-        def _manual(self, *_):
+        def _manual(self, *_a):
             self._set_key(self.e_cid.get_text(), self.e_sec.get_text())
 
         # accounts -----------------------------------------------------
@@ -3895,27 +3951,27 @@ def run_gui(start_hidden=False):
                 n = a["name"]
                 cur = self.confs.get(n, {}).get("client_id", "")
                 if n in self.queue:
-                    sub = "вход в браузере…" if self.queue[0] == n else "ждёт входа"
+                    sub = _("вход в браузере…") if self.queue[0] == n else _("ждёт входа")
                 elif cur and cur == self.cid:
-                    sub = "свой ключ ✓"
+                    sub = _("свой ключ ✓")
                 else:
-                    sub = "общий ключ rclone" if not cur else "другой ключ"
+                    sub = _("общий ключ rclone") if not cur else _("другой ключ")
                 if self._busy(n) and n not in self.queue:
-                    sub += " · передачи встанут на паузу на время входа"
+                    sub += _(" · передачи встанут на паузу на время входа")
                 r = Adw.ActionRow(title=GLib.markup_escape_text(self.app.account_label(n)),
                                   subtitle=sub)
                 r.add_prefix(Gtk.Image(icon_name="avatar-default-symbolic"))
                 if self.cid and not self.queue:
                     # the config may say "own key" while the token is still from the old
                     # key (failed login) — allow a forced re-login per account
-                    b = Gtk.Button(label="Войти заново", valign=Gtk.Align.CENTER)
+                    b = Gtk.Button(label=_("Войти заново"), valign=Gtk.Align.CENTER)
                     b.add_css_class("flat")
                     b.connect("clicked", lambda _b, n=n: self._start([n]))
                     r.add_suffix(b)
                 self.acc.add(r)
                 self.acc_rows.append(r)
 
-        def _apply(self, *_):
+        def _apply(self, *_a):
             todo = [a["name"] for a in self.app.accounts
                     if self.confs.get(a["name"], {}).get("client_id", "") != self.cid]
             # all on the key already: log in again anyway — a token left from the old key
@@ -3959,11 +4015,11 @@ def run_gui(start_hidden=False):
             self.accounts = []
             self.active = None
             self.job_menu_ids = {}
-            for name, cb, accels in (("settings", lambda *_: self.show_settings(), ["<Ctrl>comma"]),
-                                     ("about", lambda *_: self.show_about(), []),
-                                     ("new", lambda *_: self.win and self.win.show_new(), ["<Ctrl>n"]),
-                                     ("add-account", lambda *_: self.login(None), []),
-                                     ("quit", lambda *_: self.quit(), ["<Ctrl>q"])):
+            for name, cb, accels in (("settings", lambda *_a: self.show_settings(), ["<Ctrl>comma"]),
+                                     ("about", lambda *_a: self.show_about(), []),
+                                     ("new", lambda *_a: self.win and self.win.show_new(), ["<Ctrl>n"]),
+                                     ("add-account", lambda *_a: self.login(None), []),
+                                     ("quit", lambda *_a: self.quit(), ["<Ctrl>q"])):
                 a = Gio.SimpleAction.new(name, None)
                 a.connect("activate", cb)
                 self.add_action(a)
@@ -4034,7 +4090,7 @@ def run_gui(start_hidden=False):
             set_setting("active", name)
             self.accounts_changed()
             if self.win:
-                self.win.toast(f"Аккаунт: {self.account_label(name)}")
+                self.win.toast(_("Аккаунт: {0}").format(self.account_label(name)))
 
         def login(self, name, readonly=False, done_cb=None, paused=()):
             """Add a new account (name=None) or log in again to an existing one."""
@@ -4047,7 +4103,7 @@ def run_gui(start_hidden=False):
                     proc.terminate()
                     return
                 if self.win:
-                    self.win.toast("Вход уже идёт — закончите его в браузере")
+                    self.win.toast(_("Вход уже идёт — закончите его в браузере"))
                 return
             # transfers of this account are paused for the login and resumed after it
             paused = list(paused) + [j["id"] for j in self.store.jobs
@@ -4061,7 +4117,7 @@ def run_gui(start_hidden=False):
             cid, sec = s.get("client_id", ""), s.get("client_secret", "")
             self.logging_in = True
             if self.win:
-                self.win.toast("Войдите в Google в открывшемся браузере")
+                self.win.toast(_("Войдите в Google в открывшемся браузере"))
 
             def work():
                 args = [RCLONE, "config", "create", target, "drive",
@@ -4112,7 +4168,7 @@ def run_gui(start_hidden=False):
                         # because the old login had expired
                         if (j["id"] in paused and j["status"] == "paused") or (
                                 ok and j.get("remote") == target and j["status"] == "error"
-                                and j.get("error", "").startswith(AUTH_EXPIRED)):
+                                and j.get("error", "").startswith(AUTH_PREFIXES)):
                             self.win.restart_job(j["id"])
                     cache = setting("accounts", {})
                     if ok:
@@ -4122,7 +4178,7 @@ def run_gui(start_hidden=False):
                             set_setting("active", target)
                     self.accounts_changed()
                     if self.win:
-                        self.win.toast(f"Вход выполнен: {self.account_label(target)}" if ok else "Вход не удался")
+                        self.win.toast(_("Вход выполнен: {0}").format(self.account_label(target)) if ok else _("Вход не удался"))
                     if done_cb:
                         done_cb(ok)
                     return False
@@ -4133,7 +4189,7 @@ def run_gui(start_hidden=False):
 
         def remove_account(self, name):
             if any(j["status"] == "running" and j.get("remote") == name for j in self.store.jobs):
-                self.win.toast("У этого аккаунта есть активные передачи")
+                self.win.toast(_("У этого аккаунта есть активные передачи"))
                 return
             subprocess.run([RCLONE, "config", "delete", name], capture_output=True)
             cache = setting("accounts", {})
@@ -4160,7 +4216,7 @@ def run_gui(start_hidden=False):
             for job in self.store.jobs:
                 self.win.cards[job["id"]].refresh(job)
             if resumed:
-                self.win.toast("Продолжены: " + ", ".join(resumed))
+                self.win.toast(_("Продолжены: ") + ", ".join(resumed))
             try:
                 self.tray = Tray(self)
             except Exception as e:  # no session bus features: just run without a tray
@@ -4229,11 +4285,11 @@ def run_gui(start_hidden=False):
                 pct = f"{s.get('bytes', 0) / tot * 100:.0f}%" if tot else "…"
                 lines.append(f"{'⬆' if is_up(j) else '⬇'} {j['name']} — {pct}")
             if running:
-                title = f"Активных: {len(running)} · {human(speed)}/с"
+                title = _("Активных: {0} · {1}/с").format(len(running), human(speed))
             elif errors:
-                title = f"Ошибок: {len(errors)}"
+                title = _("Ошибок: {0}").format(len(errors))
             else:
-                title = "Нет активных передач"
+                title = _("Нет активных передач")
             icon = f"{APP_ID}-alert" if errors and not running else (
                 f"{APP_ID}-active" if running else APP_ID)
             return icon, (f"{APP_NAME}: {title}", "\n".join(lines))
@@ -4245,7 +4301,7 @@ def run_gui(start_hidden=False):
         def tray_menu(self):
             win = self.win
             visible = bool(win and win.get_visible())
-            E = [{"id": 1, "label": "Скрыть окно" if visible else "Показать окно",
+            E = [{"id": 1, "label": _("Скрыть окно") if visible else _("Показать окно"),
                   "app_icon": True, "cb": self.toggle_window},
                  {"id": 2, "separator": True}]
             jobs = sorted(self.store.jobs, key=lambda j: (j["status"] != "running", -j.get("created", 0)))[:7]
@@ -4256,28 +4312,28 @@ def run_gui(start_hidden=False):
                 if j["status"] == "running":
                     s = self._job_stats(j["id"])
                     tot = s.get("totalBytes") or 0
-                    pct = f"{s.get('bytes', 0) / tot * 100:.0f}%" if tot else "подготовка"
-                    info = f"{pct} · {human(s.get('speed', 0))}/с"
+                    pct = f"{s.get('bytes', 0) / tot * 100:.0f}%" if tot else _("подготовка")
+                    info = _("{0} · {1}/с").format(pct, human(s.get('speed', 0)))
                 else:
                     info = status_text(j).lower()
                 page = "up" if is_up(j) else "down"
                 E.append({"id": mid, "label": f"{arrow}  {name} — {info}",
                           "cb": lambda p=page: self._goto(p)})
             if not jobs:
-                E.append({"id": 3, "label": "Передач пока нет", "enabled": False})
+                E.append({"id": 3, "label": _("Передач пока нет"), "enabled": False})
             E.append({"id": 4, "separator": True})
             if any(j["status"] == "running" for j in self.store.jobs):
-                E.append({"id": 5, "label": "Приостановить все", "icon": "media-playback-pause-symbolic",
+                E.append({"id": 5, "label": _("Приостановить все"), "icon": "media-playback-pause-symbolic",
                           "cb": lambda: win.pause_all()})
             else:
                 can = any(j["status"] in ("paused", "interrupted", "error") for j in self.store.jobs)
-                E.append({"id": 5, "label": "Продолжить все", "icon": "media-playback-start-symbolic",
+                E.append({"id": 5, "label": _("Продолжить все"), "icon": "media-playback-start-symbolic",
                           "enabled": can, "cb": lambda: win.resume_all()})
-            E.append({"id": 6, "label": "Новая загрузка…", "icon": ICON_DOWN,
+            E.append({"id": 6, "label": _("Новая загрузка…"), "icon": ICON_DOWN,
                       "cb": lambda: (self.show_window(), win.show_add())})
-            E.append({"id": 7, "label": "Выгрузить на Диск…", "icon": ICON_UP,
+            E.append({"id": 7, "label": _("Выгрузить на Диск…"), "icon": ICON_UP,
                       "cb": lambda: (self.show_window(), win.show_upload())})
-            E.append({"id": 8, "label": "Открыть папку «Загрузки»", "icon": "folder-open-symbolic",
+            E.append({"id": 8, "label": _("Открыть папку «Загрузки»"), "icon": "folder-open-symbolic",
                       "cb": lambda: subprocess.Popen(["xdg-open", str(HOME / "Downloads")])})
             if self.accounts:
                 E.append({"id": 9, "separator": True})
@@ -4286,115 +4342,143 @@ def run_gui(start_hidden=False):
                               "radio": a["name"] == self.active,
                               "cb": lambda n=a["name"]: self.set_active(n)})
             E.append({"id": 10, "separator": True})
-            E.append({"id": 11, "label": "Выход", "icon": "application-exit-symbolic", "cb": self.quit})
+            E.append({"id": 11, "label": _("Выход"), "icon": "application-exit-symbolic", "cb": self.quit})
             return E
 
         # dialogs ------------------------------------------------------
         def show_about(self):
             Adw.AboutDialog(application_name=APP_NAME, application_icon=APP_ID,
                             version=VERSION, developer_name="rclone + GTK4/libadwaita",
-                            comments="Потоковая загрузка и выгрузка Google Drive через rclone "
-                                     "с продолжением после перезагрузки.").present(self.win)
+                            comments=_("Потоковая загрузка и выгрузка Google Drive через rclone "
+                                     "с продолжением после перезагрузки.")).present(self.win)
 
         def show_settings(self):
             self.show_window()
-            dlg = Adw.PreferencesDialog(title="Настройки")
+            dlg = Adw.PreferencesDialog(title=_("Настройки"))
             page = Adw.PreferencesPage()
 
-            acc = Adw.PreferencesGroup(title="Аккаунты Google",
-                                       description="Активный аккаунт используется для новых передач. "
-                                                   "Переключать можно и в заголовке окна, и в трее.")
+            acc = Adw.PreferencesGroup(title=_("Аккаунты Google"),
+                                       description=_("Активный аккаунт используется для новых передач. "
+                                                   "Переключать можно и в заголовке окна, и в трее."))
             add_btn = Gtk.Button(icon_name="list-add-symbolic", valign=Gtk.Align.CENTER,
-                                 tooltip_text="Добавить аккаунт")
+                                 tooltip_text=_("Добавить аккаунт"))
             add_btn.add_css_class("flat")
             acc.set_header_suffix(add_btn)
             rows = []
-            ro = Adw.SwitchRow(title="Только чтение",
-                               subtitle="Без права выгрузки; применяется при следующем входе")
+            ro = Adw.SwitchRow(title=_("Только чтение"),
+                               subtitle=_("Без права выгрузки; применяется при следующем входе"))
 
             def rebuild():
                 for r in rows:
                     acc.remove(r)
                 rows.clear()
                 if not self.accounts:
-                    r = Adw.ActionRow(title="Нет аккаунтов", subtitle="Нажмите +, чтобы войти")
+                    r = Adw.ActionRow(title=_("Нет аккаунтов"), subtitle=_("Нажмите +, чтобы войти"))
                     acc.add(r)
                     rows.append(r)
                 for a in self.accounts:
                     n = a["name"]
                     sub = [f"rclone: {n}",
-                           "только чтение" if "readonly" in self.account_scope(n) else "чтение и запись"]
+                           _("только чтение") if "readonly" in self.account_scope(n) else _("чтение и запись")]
                     if a.get("total"):
-                        sub.append(f"занято {human(a.get('used'))} из {human(a['total'])}")
+                        sub.append(_("занято {0} из {1}").format(human(a.get('used')), human(a['total'])))
                     r = Adw.ActionRow(title=GLib.markup_escape_text(self.account_label(n)),
                                       subtitle=GLib.markup_escape_text(" · ".join(sub)), activatable=True)
                     r.add_prefix(Gtk.Image.new_from_icon_name(
                         "object-select-symbolic" if n == self.active else "avatar-default-symbolic"))
                     r.connect("activated", lambda _r, n=n: self.set_active(n))
                     relog = Gtk.Button(icon_name="view-refresh-symbolic", valign=Gtk.Align.CENTER,
-                                       tooltip_text="Войти заново (с правом записи, если «Только чтение» выключено)")
+                                       tooltip_text=_("Войти заново (с правом записи, если «Только чтение» выключено)"))
                     relog.add_css_class("flat")
-                    relog.connect("clicked", lambda *_, n=n: self.login(n, readonly=ro.get_active()))
+                    relog.connect("clicked", lambda *_a, n=n: self.login(n, readonly=ro.get_active()))
                     rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                    tooltip_text="Удалить аккаунт из приложения")
+                                    tooltip_text=_("Удалить аккаунт из приложения"))
                     rm.add_css_class("flat")
-                    rm.connect("clicked", lambda *_, n=n: confirm_remove(n))
+                    rm.connect("clicked", lambda *_a, n=n: confirm_remove(n))
                     r.add_suffix(relog)
                     r.add_suffix(rm)
                     acc.add(r)
                     rows.append(r)
 
             def confirm_remove(n):
-                d = Adw.AlertDialog(heading=f"Удалить {self.account_label(n)}?",
-                                    body="Приложение забудет вход в этот аккаунт. "
-                                         "Файлы на Диске и на компьютере не тронутся.")
-                d.add_response("cancel", "Отмена")
-                d.add_response("rm", "Удалить")
+                d = Adw.AlertDialog(heading=_("Удалить {0}?").format(self.account_label(n)),
+                                    body=_("Приложение забудет вход в этот аккаунт. "
+                                         "Файлы на Диске и на компьютере не тронутся."))
+                d.add_response("cancel", _("Отмена"))
+                d.add_response("rm", _("Удалить"))
                 d.set_response_appearance("rm", Adw.ResponseAppearance.DESTRUCTIVE)
                 d.connect("response", lambda _d, r: r == "rm" and self.remove_account(n))
                 d.present(dlg)
 
-            adv = Adw.ExpanderRow(title="Параметры входа", subtitle="Только чтение")
+            adv = Adw.ExpanderRow(title=_("Параметры входа"), subtitle=_("Только чтение"))
             adv.add_row(ro)
             s = load_json(SETTINGS_FILE, {})
-            key_row = Adw.ActionRow(title="Свой ключ Google",
-                                    subtitle=("настроен — без лимитов общего ключа" if s.get("client_id")
-                                              else "убирает тормоза общего ключа rclone"),
+            key_row = Adw.ActionRow(title=_("Свой ключ Google"),
+                                    subtitle=(_("настроен — без лимитов общего ключа") if s.get("client_id")
+                                              else _("убирает тормоза общего ключа rclone")),
                                     activatable=True)
             key_row.add_prefix(Gtk.Image(icon_name="dialog-password-symbolic"))
             key_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            key_row.connect("activated", lambda *_: KeyDialog(self).present(dlg))
-            add_btn.connect("clicked", lambda *_: self.login(None, readonly=ro.get_active()))
+            key_row.connect("activated", lambda *_a: KeyDialog(self).present(dlg))
+            add_btn.connect("clicked", lambda *_a: self.login(None, readonly=ro.get_active()))
             rebuild()
             self.settings_hooks.append(rebuild)
-            dlg.connect("closed", lambda *_: rebuild in self.settings_hooks and self.settings_hooks.remove(rebuild))
+            dlg.connect("closed", lambda *_a: rebuild in self.settings_hooks and self.settings_hooks.remove(rebuild))
             page.add(acc)
             g_adv = Adw.PreferencesGroup()
             g_adv.add(key_row)
             g_adv.add(adv)
             page.add(g_adv)
 
-            tray = Adw.PreferencesGroup(title="Трей")
-            sw_close = Adw.SwitchRow(title="Сворачивать в трей при закрытии окна",
-                                     subtitle="Значок в трее показывает скорость и управляет передачами",
+            tray = Adw.PreferencesGroup(title=_("Трей"))
+            sw_close = Adw.SwitchRow(title=_("Сворачивать в трей при закрытии окна"),
+                                     subtitle=_("Значок в трее показывает скорость и управляет передачами"),
                                      active=setting("close_to_tray", True))
             sw_close.connect("notify::active", lambda r, _p: set_setting("close_to_tray", r.get_active()))
-            sw_auto = Adw.SwitchRow(title="Запускать в трее при входе в систему",
+            sw_auto = Adw.SwitchRow(title=_("Запускать в трее при входе в систему"),
                                     active=tray_autostart_enabled())
             sw_auto.connect("notify::active", lambda r, _p: set_tray_autostart(r.get_active()))
             tray.add(sw_close)
             tray.add(sw_auto)
             page.add(tray)
 
-            auto = Adw.PreferencesGroup(title="Перезагрузка")
-            sw = Adw.SwitchRow(title="Продолжать передачи после входа в систему",
-                               subtitle="Незавершённые загрузки и выгрузки стартуют сами, даже без окна",
+            auto = Adw.PreferencesGroup(title=_("Перезагрузка"))
+            sw = Adw.SwitchRow(title=_("Продолжать передачи после входа в систему"),
+                               subtitle=_("Незавершённые загрузки и выгрузки стартуют сами, даже без окна"),
                                active=autostart_enabled())
             sw.connect("notify::active", lambda r, _p: set_autostart(r.get_active()))
             auto.add(sw)
             page.add(auto)
+
+            lang = Adw.PreferencesGroup(title=_("Язык") + ("" if LANG == "en" else " · Language"))
+            langs = available_langs()
+            codes = ["system"] + list(langs)
+            sys_name = langs.get(system_lang(), langs.get("en", "English"))
+            names = [_("Системный ({0})").format(sys_name)] + list(langs.values())
+            row = Adw.ComboRow(title=_("Язык интерфейса"), model=Gtk.StringList.new(names),
+                               subtitle=_("Меняется после перезапуска приложения; передачи не прерываются"))
+            row.set_selected(codes.index(LANG_CHOICE) if LANG_CHOICE in codes else 0)
+
+            def on_lang(r, _p):
+                code = codes[r.get_selected()]
+                if code == setting("lang", "system"):
+                    return
+                set_setting("lang", code)
+                t = Adw.Toast(title=_("Язык сменится после перезапуска"), button_label=_("Перезапустить"),
+                              timeout=0)
+                t.connect("button-clicked", lambda *_a: self.restart())
+                dlg.add_toast(t)
+            row.connect("notify::selected", on_lang)
+            lang.add(row)
+            page.add(lang)
             dlg.add(page)
             dlg.present(self.win)
+
+        def restart(self):
+            """Start a fresh instance once this one has exited (jobs are systemd units)."""
+            subprocess.Popen(["sh", "-c", 'sleep 1; exec "$0" "$1"', sys.executable, str(SCRIPT)],
+                             start_new_session=True)
+            self.quit()
 
     sys.exit(App().run([sys.argv[0]]))
 

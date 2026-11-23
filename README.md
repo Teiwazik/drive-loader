@@ -65,6 +65,7 @@ Drive Loader adds a native Linux front‑end:
 - Optional start in the tray at login.
 - Desktop notifications when a job finishes or fails.
 - Follows the system light or dark style.
+- English and Russian interface, following the system language, switchable in Settings.
 
 ## Screenshots
 
@@ -122,8 +123,11 @@ driveloader --resume   # restart unfinished jobs without the GUI (what the login
 Job state lives in `~/.config/driveloader/`, and logs in `~/.local/state/driveloader/`.
 You can also watch a job with `systemctl --user status 'driveloader-*'`.
 
-> [!NOTE]
-> The interface is in **Russian** for now. Translations are welcome.
+## Languages
+
+The interface comes in **English** and **Russian**. It follows the system language by default; you can pick another one in *Settings → Language* (applies after a restart, running transfers are not affected).
+
+To add a translation, copy `i18n/en.json` to `i18n/<code>.json` (e.g. `de.json`) and translate the values. The keys are the Russian source strings. Set `"_language"` to the language's own name and `"_decimal"` to its decimal separator. Missing entries fall back to Russian.
 
 ## How it works
 
