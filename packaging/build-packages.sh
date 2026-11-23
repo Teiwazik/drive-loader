@@ -27,7 +27,9 @@ if [ -z "$NFPM" ]; then
     tar -xzf "$WORK/$tarball" -C "$WORK" nfpm
     NFPM=$WORK/nfpm
 fi
+# nfpm expands variables in some fields only, not in contents paths
+sed -e "s|\${STAGE}|$STAGE|g" -e "s|\${VERSION}|$VERSION|g" packaging/nfpm.yaml > "$WORK/nfpm.yaml"
 for p in deb rpm archlinux; do
-    "$NFPM" package --config packaging/nfpm.yaml --packager "$p" --target "$OUT/"
+    "$NFPM" package --config "$WORK/nfpm.yaml" --packager "$p" --target "$OUT/"
 done
 ls -l "$OUT"
