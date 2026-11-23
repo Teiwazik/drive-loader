@@ -164,7 +164,7 @@ libharfbuzz.so.0
 # The following are assumed to be part of the base system
 # Removing these has worked e.g., for Krita. Feel free to report if
 # you think that some of these should go into AppImages and why.
-libcom_err.so.2
+# libcom_err.so.2  (bundled by Drive Loader: Debian 13 base systems lack it)
 libexpat.so.1
 libgcc_s.so.1
 libgpg-error.so.0

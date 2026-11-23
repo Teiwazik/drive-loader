@@ -24,7 +24,7 @@ apt-get install -y -q --no-install-recommends \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-pulseaudio \
     gstreamer1.0-libav libsoup-3.0-0 \
     librsvg2-common libgdk-pixbuf2.0-bin libglib2.0-bin adwaita-icon-theme \
-    dconf-gsettings-backend \
+    dconf-gsettings-backend shared-mime-info \
     ca-certificates curl unzip file zsync desktop-file-utils
 # video preview needs the GTK 4 video sink, packaged only in some Ubuntu releases
 apt-get install -y -q --no-install-recommends gstreamer1.0-gtk4 || echo "no gstreamer1.0-gtk4: video preview off"
@@ -72,6 +72,16 @@ cp "$SYS"/gdk-pixbuf-2.0/2.10.0/loaders/*.so "$APPDIR/usr/lib/gdk-pixbuf-2.0/loa
 "$SYS"/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders "$APPDIR"/usr/lib/gdk-pixbuf-2.0/loaders/*.so \
     | sed "s|$APPDIR|@APPDIR@|g" > "$APPDIR/usr/lib/gdk-pixbuf-2.0/loaders.cache.in"
 grep -q svg "$APPDIR/usr/lib/gdk-pixbuf-2.0/loaders.cache.in"
+
+# ---- MIME database: gdk-pixbuf picks a loader by GIO's content type, so without
+# it SVG icons fail ("Couldn't recognize the image file format"). XDG_DATA_DIRS
+# lists the bundled copy last, so the host's own database still wins.
+mkdir -p "$APPDIR/usr/share/mime"
+for f in mime.cache globs globs2 magic aliases subclasses types generic-icons icons \
+         XMLnamespaces treemagic version; do
+    cp "/usr/share/mime/$f" "$APPDIR/usr/share/mime/" 2>/dev/null || echo "no mime/$f"
+done
+test -s "$APPDIR/usr/share/mime/mime.cache"
 
 # ---- GIO modules (dconf settings backend only) and GTK settings schemas
 mkdir -p "$APPDIR/usr/lib/gio/modules" "$APPDIR/usr/share/glib-2.0/schemas"
